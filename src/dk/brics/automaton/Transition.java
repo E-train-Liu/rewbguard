@@ -30,6 +30,7 @@
 package dk.brics.automaton;
 
 import java.io.Serializable;
+import java.util.logging.Logger;
 
 /** 
  * <code>Automaton</code> transition. 
@@ -42,33 +43,47 @@ public class Transition implements Serializable, Cloneable {
 	
 	static final long serialVersionUID = 40001;
 	
+	static final Logger logger = Logger.getLogger(Transition.class.getName());
+
+	public static enum Kind {
+		TRANSITION_CHAR,
+		TRANSITION_REALEPSILON,
+		TRANSITION_CAPTURE_OPEN,
+		TRANSITION_CAPTURE_CLOSE,
+		TRANSITION_BACKREF
+	}
+
+	Kind kind;
+
 	/* 
 	 * CLASS INVARIANT: min<=max
 	 */
-	
+
 	char min;
 	char max;
+
+	int group;
 	
 	State to;
 	
 	/** 
-	 * Constructs a new singleton interval transition. 
+	 * Constructs a new singleton char interval transition. 
 	 * @param c transition character
 	 * @param to destination state
 	 */
 	public Transition(char c, State to)	{
-		min = max = c;
-		this.to = to;
+		this(c, c, to);
 	}
 	
 	/** 
-	 * Constructs a new transition. 
+	 * Constructs a new char transition. 
 	 * Both end points are included in the interval.
 	 * @param min transition interval minimum
 	 * @param max transition interval maximum
 	 * @param to destination state
 	 */
 	public Transition(char min, char max, State to)	{
+		kind = Kind.TRANSITION_CHAR;
 		if (max < min) {
 			char t = max;
 			max = min;
@@ -78,20 +93,68 @@ public class Transition implements Serializable, Cloneable {
 		this.max = max;
 		this.to = to;
 	}
+
+	/**
+	 * Construct a new real epsilon transition.
+	 * @param to destination state
+	 */
+	public Transition(State to) {
+		kind = Kind.TRANSITION_REALEPSILON;
+		this.to = to;
+	}
+
+	/**
+	 * Construct a new capture open, capture close, or backreference transition.
+	 * @param kind transition kind, only can be 
+	 * 		  		{@link Kind#TRANSITION_CAPTURE_OPEN}, 
+	 * 		  		{@link Kind#TRANSITION_CAPTURE_CLOSE},
+	 * 		  		{@link Kind#TRANSITION_BACKREF}.
+	 * @param group group number of capture or backreference
+	 * @param to destination state
+	 */
+	public Transition(Kind kind, int group, State to) {
+		this.kind = kind;
+		this.group = group;
+		this.to = to;
+		if (kind != Kind.TRANSITION_CAPTURE_OPEN 
+			&& kind != Kind.TRANSITION_CAPTURE_CLOSE
+			&& kind != Kind.TRANSITION_BACKREF
+		)
+			logger.warning("When kind = " + kind.name() + ", group should be unset.");
+	}
 	
-	/** Returns minimum of this transition interval. */
+	/** Returns minimum of this char transition interval. */
 	public char getMin() {
+		if (kind != Kind.TRANSITION_CHAR)
+			logger.warning("When kind = " + kind.name() + ", min should unset.");
 		return min;
 	}
 	
-	/** Returns maximum of this transition interval. */
+	/** Returns maximum of this char transition interval. */
 	public char getMax() {
+		if (kind != Kind.TRANSITION_CHAR)
+			logger.warning("When kind = " + kind.name() + ", max should unset.");
 		return max;
 	}
 	
 	/** Returns destination of this transition. */
 	public State getDest() {
 		return to;
+	}
+
+	/** Return the kind of transition, */
+	public Kind getKind() {
+		return kind;
+	}
+
+	/** Returns the group number of capture-open, capture-close or backreference transition. */
+	public int getGroup() {
+		if (kind != Kind.TRANSITION_CAPTURE_OPEN 
+			&& kind != Kind.TRANSITION_CAPTURE_CLOSE
+			&& kind != Kind.TRANSITION_BACKREF
+		)
+			logger.warning("When kind = " + kind.name() + ", group should be unset.");
+		return group;
 	}
 	
 	/** 
@@ -102,11 +165,22 @@ public class Transition implements Serializable, Cloneable {
 	 */
 	@Override
 	public boolean equals(Object obj) {
-		if (obj instanceof Transition) {
-			Transition t = (Transition)obj;
-			return t.min == min && t.max == max && t.to == to;
-		} else
+		if (!(obj instanceof Transition))
 			return false;
+		Transition t = (Transition)obj;
+		if (t.kind != kind)
+			return false;
+		switch (kind) {
+			case TRANSITION_REALEPSILON:
+				return t.to == to;
+			case TRANSITION_CAPTURE_OPEN:
+			case TRANSITION_CAPTURE_CLOSE:
+			case TRANSITION_BACKREF:
+				return t.group == group && t.to == to;
+			case TRANSITION_CHAR:
+			default:
+				return t.min == min && t.max == max && t.to == to;
+		}
 	}
 	
 	/** 
@@ -116,7 +190,19 @@ public class Transition implements Serializable, Cloneable {
 	 */
 	@Override
 	public int hashCode() {
-		return min * 2 + max * 3;
+		switch (kind) {
+			case TRANSITION_BACKREF:
+			case TRANSITION_CAPTURE_CLOSE:
+			case TRANSITION_CAPTURE_OPEN:
+				int k = kind == Kind.TRANSITION_BACKREF ? 4 : 
+					(kind == Kind.TRANSITION_CAPTURE_CLOSE ? 3 : 2);
+				return group & ((1 << 28) - 1) | (k << 28);
+			case TRANSITION_REALEPSILON:
+				return System.identityHashCode(to) & ((1 << 28) - 1) | (1 << 28);
+			case TRANSITION_CHAR:
+			default:
+				return min * 2 + max * 3;
+		}
 	}
 	
 	/** 
@@ -131,12 +217,27 @@ public class Transition implements Serializable, Cloneable {
 			throw new RuntimeException(e);
 		}
 	}
-	
-	static void appendCharString(char c, StringBuilder b) {
+
+	/**
+	 * Clone this transition, and set the destination of the new transition.
+	 * @param to the new destination
+	 * @return copy of this to the new destination
+	 */
+	public Transition cloneToNewDest(State to) {
+		Transition newT = clone();
+		newT.to = to;
+		return newT;
+	}
+
+	static void appendCharString(char c, StringBuilder b, boolean dot) {
 		if (c >= 0x21 && c <= 0x7e && c != '\\' && c != '"')
 			b.append(c);
+		else if (c == '\\')
+			b.append(dot ? "\\\\\\\\" : "\\\\");
+		else if (c == '"')
+			b.append("\\\"");
 		else {
-			b.append("\\u");
+			b.append(dot ? "\\\\u" : "\\u");
 			String s = Integer.toHexString(c);
 			if (c < 0x10)
 				b.append("000").append(s);
@@ -148,6 +249,10 @@ public class Transition implements Serializable, Cloneable {
 				b.append(s);
 		}
 	}
+
+	static void appendCharString(char c, StringBuilder b) {
+		appendCharString(c, b, false);
+	}
 	
 	/** 
 	 * Returns a string describing this state. Normally invoked via 
@@ -156,22 +261,41 @@ public class Transition implements Serializable, Cloneable {
 	@Override
 	public String toString() {
 		StringBuilder b = new StringBuilder();
-		appendCharString(min, b);
-		if (min != max) {
-			b.append("-");
-			appendCharString(max, b);
-		}
+		appendRepr(b, false);
 		b.append(" -> ").append(to.number);
 		return b.toString();
 	}
 
 	void appendDot(StringBuilder b) {
 		b.append(" -> ").append(to.number).append(" [label=\"");
-		appendCharString(min, b);
-		if (min != max) {
-			b.append("-");
-			appendCharString(max, b);
+		appendRepr(b, true);
+		b.append('"');
+		if (kind != Kind.TRANSITION_CHAR)
+		 	b.append(",fontcolor=\"gray\"");
+		b.append("]\n");
+	}
+
+	private void appendRepr(StringBuilder b, boolean dot) {
+		switch (kind) {
+			case TRANSITION_BACKREF:
+				b.append(dot ? "\\\\" : "\\").append(group);
+				break;
+			case TRANSITION_CAPTURE_CLOSE:
+				b.append(')').append(group);
+				break;
+			case TRANSITION_CAPTURE_OPEN:
+				b.append('(').append(group);
+				break;
+			case TRANSITION_REALEPSILON:
+				b.append('ϵ');
+				break;
+			case TRANSITION_CHAR:
+			default:
+				appendCharString(min, b, dot);
+				if (min != max) {
+					b.append("-");
+					appendCharString(max, b, dot);
+				}
 		}
-		b.append("\"]\n");
 	}
 }

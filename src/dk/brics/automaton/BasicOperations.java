@@ -29,6 +29,7 @@
 
 package dk.brics.automaton;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collection;
@@ -38,6 +39,8 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
+
 
 /**
  * Basic automata operations.
@@ -55,9 +58,9 @@ final public class BasicOperations {
 	static public Automaton concatenate(Automaton a1, Automaton a2) {
 		if (a1.isSingleton() && a2.isSingleton())
 			return BasicAutomata.makeString(a1.singleton + a2.singleton);
-		if (isEmpty(a1) || isEmpty(a2))
+		if (isSupportAndEmpty(a1) || isSupportAndEmpty(a2))
 			return BasicAutomata.makeEmpty();
-		boolean deterministic = a1.isSingleton() && a2.isDeterministic();
+		boolean deterministic = Automaton.epsilon_default_simulate && a1.isSingleton() && a2.isDeterministic();
 		if (a1 == a2) {
 			a1 = a1.cloneExpanded();
 			a2 = a2.cloneExpanded();
@@ -65,11 +68,15 @@ final public class BasicOperations {
 			a1 = a1.cloneExpandedIfRequired();
 			a2 = a2.cloneExpandedIfRequired();
 		}
-		for (State s : a1.getAcceptStates()) {
-			s.accept = false;
-			s.addEpsilon(a2.initial);
-		}
-		a1.deterministic = deterministic;
+		if (Automaton.epsilon_default_simulate)
+			for (State s : a1.getAcceptStates()) {
+				s.accept = false;
+				s.addSimulatedEpsilon(a2.initial);
+			}
+		else
+			compactInplaceRealEpsilonConcatenate(a1, a2);
+		a1.memory = a1.memory || a2.memory;
+		a1.deterministic = !a1.memory && deterministic;
 		a1.clearHashCode();
 		a1.checkMinimizeAlways();
 		return a1;
@@ -97,45 +104,198 @@ final public class BasicOperations {
 			return BasicAutomata.makeString(b.toString());
 		} else {
 			for (Automaton a : l)
-				if (a.isEmpty())
+				if (isSupportAndEmpty(a))
 					return BasicAutomata.makeEmpty();
 			Set<Integer> ids = new HashSet<Integer>();
 			for (Automaton a : l)
 				ids.add(System.identityHashCode(a));
 			boolean has_aliases = ids.size() != l.size();
-			Automaton b = l.get(0);
-			if (has_aliases)
-				b = b.cloneExpanded();
-			else
-				b = b.cloneExpandedIfRequired();
-			Set<State> ac = b.getAcceptStates();
-			boolean first = true;
-			for (Automaton a : l)
-				if (first)
-					first = false;
+			Automaton b = null;
+			HashSet<State> ss = new HashSet<State>();
+			Set<State> ac = null;
+			boolean memory = false;
+			for (Automaton a : l) {
+				if (isSupportAndEmptyString(a))
+					continue;
+				Automaton aa = a;
+				if (has_aliases)
+					aa = aa.cloneExpanded();
+				else
+					aa = aa.cloneExpandedIfRequired();
+				Set<State> ms = aa.getStates();
+				Set<State> ns = filterAcceptStates(ms);
+				if (b == null)
+					b = aa;
 				else {
-					if (a.isEmptyString())
-						continue;
-					Automaton aa = a;
-					if (has_aliases)
-						aa = aa.cloneExpanded();
+					if (Automaton.epsilon_default_simulate)
+						for (State s : ac) {
+							s.accept = false;
+							s.addSimulatedEpsilon(aa.initial);
+							if (s.accept)
+								ns.add(s);
+						}
 					else
-						aa = aa.cloneExpandedIfRequired();
-					Set<State> ns = aa.getAcceptStates();
-					for (State s : ac) {
-						s.accept = false;
-						s.addEpsilon(aa.initial);
-						if (s.accept)
-							ns.add(s);
-					}
-					ac = ns;
+						compactInplaceRealEpsilonConcatenate(ss, ac, ms, aa.initial);
 				}
+				ss.addAll(ms);
+				ac = ns;
+				memory = memory || aa.memory;
+			}
+			if (b == null)
+				return BasicAutomata.makeEmptyString();
 			b.deterministic = false;
+			b.memory = memory;
 			b.clearHashCode();
 			b.checkMinimizeAlways();
 			return b;
 		}
 	}
+
+
+	/**
+	 * Make conpact inplace concatenation using real epsilon,
+	 * reduce the number of epsilon transitions.
+	 */
+	private static void compactInplaceRealEpsilonConcatenate(Automaton a1, Automaton a2) {
+		Set<State> ss1 = a1.getStates();
+		Set<State> fs1 = filterAcceptStates(ss1);
+		compactInplaceRealEpsilonConcatenate(ss1, fs1, a2.getStates(), a2.initial);
+	}
+
+	/**
+	 * Make conpact inplace concatenation using real epsilon,
+	 * reduce the number of epsilon transitions.
+	 * If the final states of automaton 1 is dropped, it will be removed from
+	 * {@code states1}.
+	 */
+	private static void compactInplaceRealEpsilonConcatenate(
+		Set<State> states1, Set<State> finals1,
+		Set<State> states2, State initial2
+	) {
+		if (finals1.size() == 1) {
+			State f1 = finals1.iterator().next();
+			boolean oneway = f1.transitions.isEmpty();
+			if (!oneway) {
+				oneway = true;
+				for (State s2 : states2)
+					for (Transition t2 : s2.transitions)
+						if (t2.to == initial2) {
+							oneway = false;
+							break;
+						}
+			}
+			if (oneway) {
+				for (State s1 : states1)
+					for (Transition t1 : s1.transitions)
+						if (t1.to == f1)
+							t1.to = initial2;
+				initial2.transitions.addAll(f1.transitions);
+				states1.remove(f1);
+				// a1.deterministic = a1.deterministic || a2.deterministic;
+				// if (a1.deterministic) {
+				// 	Transition t1p = null;
+				// 	for (Transition t1 : a2.initial.getSortedTransitionArray(false)) {
+				// 		if (t1.kind != Transition.Kind.TRANSITION_CHAR)
+				// 			break;
+				// 		if (t1p != null && t1.min <= t1p.max) {
+				// 			a1.deterministic = false;
+				// 			break;
+				// 		}
+				// 		t1p = t1;
+				// 	}
+				// }
+				return;
+			}
+		}
+		for (State f1 : finals1) {
+			f1.accept = false;
+			f1.addRealEpsilon(initial2);
+		}
+	}
+
+	static Set<State> filterAcceptStates(Set<State> ss) {
+		HashSet<State> fs = new HashSet<State>();
+		for (State s : ss)
+			if (s.accept)
+				fs.add(s);
+		return fs;
+	}
+
+	// static public Automaton concatenate(List<Automaton> l) {
+	// 	if (l.isEmpty())
+	// 		return BasicAutomata.makeEmptyString();
+	// 	boolean all_singleton = true;
+	// 	for (Automaton a : l)
+	// 		if (!a.isSingleton()) {
+	// 			all_singleton = false;
+	// 			break;
+	// 		}
+	// 	if (all_singleton) {
+	// 		StringBuilder b = new StringBuilder();
+	// 		for (Automaton a : l)
+	// 			b.append(a.singleton);
+	// 		return BasicAutomata.makeString(b.toString());
+	// 	} else {
+	// 		for (Automaton a : l) {
+	// 			if (isSupportAndEmpty(a))
+	// 				return BasicAutomata.makeEmpty();
+	// 		}
+	// 		Set<Integer> ids = new HashSet<Integer>();
+	// 		for (Automaton a : l)
+	// 			ids.add(System.identityHashCode(a));
+	// 		boolean has_aliases = ids.size() != l.size();
+	// 		Automaton b = null;
+	// 		Set<State> ac = null;
+	// 		boolean memory = false;
+	// 		for (Automaton a : l) {
+	// 			if (isSupportAndEmptyString(a))
+	// 				continue;
+	// 			Automaton aa = a;
+	// 			if (has_aliases)
+	// 				aa = aa.cloneExpanded();
+	// 			else
+	// 				aa = aa.cloneExpandedIfRequired();
+	// 			Set<State> ns = aa.getAcceptStates();
+	// 			if (b == null)
+	// 				b = aa;
+	// 			else {
+	// 				boolean compat = ac.size() == 1;
+	// 				if (compat) {
+	// 					State lastState = null;
+	// 					for (Transition t : aa.initial.transitions) {
+	// 						if (lastState != null && t.to != lastState) {
+	// 							compat = false;
+	// 							break;
+	// 						}
+	// 						lastState = t.to;
+	// 					}
+	// 				}
+	// 				if (compat) {
+	// 					State s = ac.iterator().next();
+	// 					s.accept = false;
+	// 					s.addSimulatedEpsilon(aa.initial);
+	// 					if (s.accept)
+	// 						ns.add(s);
+	// 				} else
+	// 					for (State s : ac) {
+	// 						s.accept = false;
+	// 						s.addEpsilon(aa.initial);
+	// 						if (s.accept)
+	// 							ns.add(s);
+	// 					}
+	// 			}
+	// 			ac = ns;
+	// 			memory = memory || aa.memory;
+	// 		}
+	// 		if (b == null)
+	// 			return BasicAutomata.makeEmptyString();
+	// 		b.deterministic = false;
+	// 		b.memory = memory;
+	// 		b.clearHashCode();
+	// 		b.checkMinimizeAlways();
+	// 		return b;
+	// 	}
+	// }
 
 	/**
 	 * Returns an automaton that accepts the union of the empty string and the
@@ -167,14 +327,35 @@ final public class BasicOperations {
 		State s = new State();
 		s.accept = true;
 		s.addEpsilon(a.initial);
-		for (State p : a.getAcceptStates())
+		for (State p : a.getAcceptStates()) {
+			if (p == a.initial)
+	 			continue;
 			p.addEpsilon(s);
+			p.accept = Automaton.epsilon_default_simulate;
+		}
 		a.initial = s;
 		a.deterministic = false;
 		a.clearHashCode();
 		a.checkMinimizeAlways();
 		return a;
 	}
+	// static public Automaton repeat(Automaton a) {
+	// 	a = a.cloneExpanded();
+	// 	Set<State> ps = a.getAcceptStates();
+	// 	if (ps.isEmpty())
+	// 		return Automaton.makeEmpty();
+	// 	a.initial.accept = true;
+	// 	for (State p : ps) {
+	// 		if (p == a.initial)
+	// 			continue;
+	// 		p.addEpsilon(a.initial);
+	// 		p.accept = Automaton.epsilon_default_simulate;
+	// 	}
+	// 	a.deterministic = false;
+	// 	a.clearHashCode();
+	// 	a.checkMinimizeAlways();
+	// 	return a;
+	// }
 
 	/**
 	 * Returns an automaton that accepts <code>min</code> or more
@@ -185,12 +366,62 @@ final public class BasicOperations {
 	static public Automaton repeat(Automaton a, int min) {
 		if (min == 0)
 			return repeat(a);
+		if (min == 1) {
+			a = a.cloneExpanded();
+			State s = new State();
+			s.accept = true;
+			s.addEpsilon(a.initial);
+			for (State p : a.getAcceptStates()) {
+				if (p == a.initial)
+	 				continue;
+				p.addEpsilon(s);
+				p.accept = Automaton.epsilon_default_simulate;
+			}
+			a.deterministic = false;
+			a.clearHashCode();
+			a.checkMinimizeAlways();
+			return a;
+		}
 		List<Automaton> as = new ArrayList<Automaton>();
-		while (min-- > 0)
+		while (min-- > 1)
 			as.add(a);
-		as.add(repeat(a));
+		as.add(repeat(a, 1));
 		return concatenate(as);
 	}
+	// static public Automaton repeat(Automaton a, int min) {
+	// 	if (min == 0)
+	// 		return repeat(a);
+	// 	if (min == 1) {
+	// 		a = a.cloneExpanded();
+	// 		Set<State> ps = a.getAcceptStates();
+	// 		if (ps.isEmpty())
+	// 			return Automaton.makeEmpty();
+	// 		State s;
+	// 		if (ps.size() == 1)
+	// 			s = ps.iterator().next();
+	// 		else {
+	// 			s = new State();
+	// 			s.addEpsilon(a.initial);
+	// 		}
+	// 		s.accept = true;
+	// 		for (State p : ps) {
+	// 			if (p == a.initial)
+	// 				continue;
+	// 			p.addEpsilon(s);
+	// 			p.accept = Automaton.epsilon_default_simulate;
+	// 		}
+	// 		a.deterministic = false;
+	// 		a.clearHashCode();
+	// 		a.checkMinimizeAlways();
+	// 		return a;
+	// 	}
+	// 	ArrayList<Automaton> as = new ArrayList<Automaton>();
+	// 	as.ensureCapacity(min + 1);
+	// 	while (min-- > 0)
+	// 		as.add(a);
+	// 	as.add(repeat(a));
+	// 	return concatenate(as);
+	// }
 	
 	/**
 	 * Returns an automaton that accepts between <code>min</code> and
@@ -203,6 +434,8 @@ final public class BasicOperations {
 	static public Automaton repeat(Automaton a, int min, int max) {
 		if (min > max)
 			return BasicAutomata.makeEmpty();
+		if (min == max && a.isSingleton())
+			return BasicAutomata.makeString(a.singleton.repeat(min));
 		max -= min;
 		a.expandSingleton();
 		Automaton b;
@@ -211,7 +444,8 @@ final public class BasicOperations {
 		else if (min == 1)
 			b = a.clone();
 		else {
-			List<Automaton> as = new ArrayList<Automaton>();
+			ArrayList<Automaton> as = new ArrayList<Automaton>();
+			as.ensureCapacity(min);
 			while (min-- > 0)
 				as.add(a);
 			b = concatenate(as);
@@ -258,9 +492,9 @@ final public class BasicOperations {
 	 * Complexity: quadratic in number of states (if already deterministic).
 	 */
 	static public Automaton minus(Automaton a1, Automaton a2) {
-		if (a1.isEmpty() || a1 == a2)
+		if (a1 == a2 || isSupportAndEmpty(a1))
 			return BasicAutomata.makeEmpty();
-		if (a2.isEmpty())
+		if (isSupportAndEmpty(a2))
 			return a1.cloneIfRequired();
 		if (a1.isSingleton()) {
 			if (a2.run(a1.singleton))
@@ -278,7 +512,7 @@ final public class BasicOperations {
 	 * <p>
 	 * Complexity: quadratic in number of states.
 	 */
-	static public Automaton intersection(Automaton a1, Automaton a2) {
+	static public Automaton intersection(Automaton a1, Automaton a2) throws UnsupportedOperationException {
 		if (a1.isSingleton()) {
 			if (a2.run(a1.singleton))
 				return a1.cloneIfRequired();
@@ -301,28 +535,62 @@ final public class BasicOperations {
 		StatePair p = new StatePair(c.initial, a1.initial, a2.initial);
 		worklist.add(p);
 		newstates.put(p, p);
+		BiFunction<State, State, StatePair> getStatePair = new BiFunction<State, State, StatePair>() {
+			@Override
+			public StatePair apply(State s1, State s2) {
+				StatePair q = new StatePair(s1, s2);
+				StatePair r = newstates.get(q);
+				if (r == null) {
+					q.s = new State();
+					worklist.add(q);
+					newstates.put(q, q);
+					r = q;
+				}
+				return r;
+			}
+		};
 		while (worklist.size() > 0) {
 			p = worklist.removeFirst();
 			p.s.accept = p.s1.accept && p.s2.accept;
 			Transition[] t1 = transitions1[p.s1.number];
 			Transition[] t2 = transitions2[p.s2.number];
-			for (int n1 = 0, b2 = 0; n1 < t1.length; n1++) {
-				while (b2 < t2.length && t2[b2].max < t1[n1].min)
-					b2++;
-				for (int n2 = b2; n2 < t2.length && t1[n1].max >= t2[n2].min; n2++) 
+			// find the border between char transitions and epsilon transitions
+			int e1 = 0;
+			for (; e1 < t1.length && t1[e1].kind == Transition.Kind.TRANSITION_CHAR; e1++);
+			int e2 = 0;
+			for (; e2 < t2.length && t2[e2].kind == Transition.Kind.TRANSITION_CHAR; e2++);
+			// deal with char transitions
+			for (int n1 = 0, b2 = 0; n1 < e1; n1++) {
+				for (; b2 < e2 && t2[b2].max < t1[n1].min; b2++);
+				for (int n2 = b2; n2 < e2 && t1[n1].max >= t2[n2].min; n2++)
 					if (t2[n2].max >= t1[n1].min) {
-						StatePair q = new StatePair(t1[n1].to, t2[n2].to);
-						StatePair r = newstates.get(q);
-						if (r == null) {
-							q.s = new State();
-							worklist.add(q);
-							newstates.put(q, q);
-							r = q;
-						}
+						StatePair r = getStatePair.apply(t1[n1].to, t2[n2].to);
 						char min = t1[n1].min > t2[n2].min ? t1[n1].min : t2[n2].min;
 						char max = t1[n1].max < t2[n2].max ? t1[n1].max : t2[n2].max;
 						p.s.transitions.add(new Transition(min, max, r.s));
 					}
+			}
+			// deal with epsilon transitions
+			for (int n1 = e1; n1 < t1.length; ++n1) {
+				if (t1[n1].kind == Transition.Kind.TRANSITION_BACKREF)
+					throw new UnsupportedOperationException("intersection(): currently unsupport autonmaton with backref");
+				// if (t1[n1].kind == Transition.Kind.TRANSITION_REALEPSILON ||
+				// 	t1[n1].kind == Transition.Kind.TRANSITION_CAPTURE_OPEN ||
+				// 	t1[n1].kind == Transition.Kind.TRANSITION_CAPTURE_CLOSE
+				// )
+				StatePair r = getStatePair.apply(t1[n1].to, p.s2);
+				p.s.addRealEpsilon(r.s);
+				
+			}
+			for (int n2 = e2; n2 < t2.length; ++n2) {
+				if (t2[n2].kind == Transition.Kind.TRANSITION_BACKREF)
+					throw new UnsupportedOperationException("intersection(): currently unsupport autonmaton with backref");
+				// if (t2[n2].kind == Transition.Kind.TRANSITION_REALEPSILON ||
+				// 	t2[n2].kind == Transition.Kind.TRANSITION_CAPTURE_OPEN ||
+				// 	t2[n2].kind == Transition.Kind.TRANSITION_CAPTURE_CLOSE
+				// )
+				StatePair r = getStatePair.apply(p.s1, t2[n2].to);
+				p.s.addRealEpsilon(r.s);
 			}
 		}
 		c.deterministic = a1.deterministic && a2.deterministic;
@@ -334,22 +602,29 @@ final public class BasicOperations {
 	/**
 	 * Returns true if the language of <code>a1</code> is a subset of the
 	 * language of <code>a2</code>. 
-	 * As a side-effect, <code>a2</code> is determinized if not already marked as
-	 * deterministic.
+	 * <!--As a side-effect, <code>a2</code> is determinized if not already marked as
+	 * deterministic.-->
 	 * <p>
 	 * Complexity: quadratic in number of states.
 	 */
-	public static boolean subsetOf(Automaton a1, Automaton a2) {
+	public static boolean subsetOf(Automaton a1, Automaton a2) throws UnsupportedOperationException {
 		if (a1 == a2)
 			return true;
 		if (a1.isSingleton()) {
 			if (a2.isSingleton())
 				return a1.singleton.equals(a2.singleton);
 			return a2.run(a1.singleton);
+		} else if (a2.isSingleton())
+			return a1.run(a2.singleton);
+		if (a1.isActualMemory() || a2.isActualMemory())
+			throw new UnsupportedOperationException("subsetOf() currently unsupport automaton with backref");
+		if (!a2.isActualDeterministic()) {
+			a2 = a2.clone();
+			a2.determinize();
 		}
-		a2.determinize();
 		Transition[][] transitions1 = Automaton.getSortedTransitions(a1.getStates());
 		Transition[][] transitions2 = Automaton.getSortedTransitions(a2.getStates());
+		Set<State> liveStates1 = a1.getLiveStates();		
 		LinkedList<StatePair> worklist = new LinkedList<StatePair>();
 		HashSet<StatePair> visited = new HashSet<StatePair>();
 		StatePair p = new StatePair(a1.initial, a2.initial);
@@ -362,6 +637,23 @@ final public class BasicOperations {
 			Transition[] t1 = transitions1[p.s1.number];
 			Transition[] t2 = transitions2[p.s2.number];
 			for (int n1 = 0, b2 = 0; n1 < t1.length; n1++) {
+				// transitions to dead states are not considered as transitions
+				// that only appears in a1
+				if (!liveStates1.contains(t1[n1].to))
+					continue;
+				// when compared, char trasiiton are less than other kinds of
+				// transitions.
+				if (t1[n1].kind == Transition.Kind.TRANSITION_REALEPSILON || 
+					t1[n1].kind == Transition.Kind.TRANSITION_CAPTURE_OPEN ||
+					t1[n1].kind == Transition.Kind.TRANSITION_CAPTURE_CLOSE
+				) {
+					StatePair q = new StatePair(t1[n1].to, p.s2);
+					if (!visited.contains(q)) {
+						worklist.add(q);
+						visited.add(q);
+						continue;
+					}
+				}
 				while (b2 < t2.length && t2[b2].max < t1[n1].min)
 					b2++;
 				int min1 = t1[n1].min, max1 = t1[n1].max;
@@ -402,6 +694,7 @@ final public class BasicOperations {
 		s.addEpsilon(a2.initial);
 		a1.initial = s;
 		a1.deterministic = false;
+		a1.memory = a1.memory || a2.memory;
 		a1.clearHashCode();
 		a1.checkMinimizeAlways();
 		return a1;
@@ -417,11 +710,13 @@ final public class BasicOperations {
 		for (Automaton a : l)
 			ids.add(System.identityHashCode(a));
 		boolean has_aliases = ids.size() != l.size();
+		boolean memory = false;
 		State s = new State();
 		for (Automaton b : l) {
-			if (b.isEmpty())
+			if (isSupportAndEmpty(b))
 				continue;
 			Automaton bb = b;
+			memory = memory || bb.memory;
 			if (has_aliases)
 				bb = bb.cloneExpanded();
 			else
@@ -431,6 +726,7 @@ final public class BasicOperations {
 		Automaton a = new Automaton();
 		a.initial = s;
 		a.deterministic = false;
+		a.memory = memory;
 		a.clearHashCode();
 		a.checkMinimizeAlways();
 		return a;
@@ -452,7 +748,11 @@ final public class BasicOperations {
 	/** 
 	 * Determinizes the given automaton using the given set of initial states. 
 	 */
-	static void determinize(Automaton a, Set<State> initialset) {
+	static void determinize(Automaton a, Set<State> initialset) {			
+		HashSet<State> newInitialSet = new HashSet<State>();
+		for (State s : initialset)
+			s.getEpsilonClosure(newInitialSet);
+		initialset = newInitialSet;
 		char[] points = a.getStartPoints();
 		// subset construction
 		LinkedList<Set<State>> worklist = new LinkedList<Set<State>>();
@@ -471,9 +771,12 @@ final public class BasicOperations {
 			for (int n = 0; n < points.length; n++) {
 				Set<State> p = new HashSet<State>();
 				for (State q : s)
-					for (Transition t : q.transitions)
-						if (t.min <= points[n] && points[n] <= t.max)
-							p.add(t.to);
+					for (Transition t : q.transitions) {
+						if (t.kind == Transition.Kind.TRANSITION_BACKREF)
+							throw new UnsupportedOperationException("determinize(): currently unsupport automaton with backref");
+						if (t.kind == Transition.Kind.TRANSITION_CHAR && t.min <= points[n] && points[n] <= t.max)
+							t.to.getEpsilonClosure(p, true);
+					}
 				if (!p.isEmpty()) {
                     State q = newstate.get(p);
                     if (q == null) {
@@ -492,7 +795,163 @@ final public class BasicOperations {
 			}
 		}
 		a.deterministic = true;
+		a.memory = false;
 		a.removeDeadTransitions();
+	}
+
+	// static void determinize(Automaton a, Set<State> initialset) {
+	// 	// cannot determinize automaton with backrefe
+	// 	if (a.isActualMemory())
+	// 		throw new UnsupportedOperationException(
+	// 			"determinize() currently unsupport automaton with backref"
+	// 		);
+	// 	// add states that are in the epsilon closure of initial set
+	// 	HashSet<State> initset = new HashSet<State>();
+	// 	for (State s : initialset)
+	// 		s.getEpsilonClosure(initset, true);
+	// 	initialset = initset;
+	// 	// // replace all real espilon transitions with simulated epsilon transitions
+	// 	// for (State s : a.getStates()) {
+	// 	// 	ArrayList<Transition> realEpsTrans = new ArrayList<Transition>();
+	// 	// 	for (Transition t : s.transitions) {
+	// 	// 		if (
+	// 	// 			t.kind == Transition.Kind.TRANSITION_CAPTURE_OPEN ||
+	// 	// 			t.kind == Transition.Kind.TRANSITION_CAPTURE_CLOSE ||
+	// 	// 			t.kind == Transition.Kind.TRANSITION_BACKREF
+	// 	// 		)
+	// 	// 			throw new UnsupportedOperationException(
+	// 	// 				"currently do not support determinizing automaton with captures or backrefs"
+	// 	// 			);
+	// 	// 		else if (t.kind == Transition.Kind.TRANSITION_REALEPSILON)
+	// 	// 			realEpsTrans.add(t);
+	// 	// 	}
+	// 	// 	s.transitions.removeAll(realEpsTrans);
+	// 	// 	for (Transition t : realEpsTrans)
+	// 	// 		s.addSimulatedEpsilon(t.to);
+	// 	// }
+	// 	char[] points = a.getStartPoints();
+	// 	// subset construction
+	// 	LinkedList<Set<State>> worklist = new LinkedList<Set<State>>();
+	// 	Map<Set<State>, State> newstate = new HashMap<Set<State>, State>();
+	// 	worklist.add(initialset);
+	// 	a.initial = new State();
+	// 	newstate.put(initialset, a.initial);
+	// 	while (worklist.size() > 0) {
+	// 		Set<State> s = worklist.removeFirst();
+	// 		State r = newstate.get(s);
+	// 		for (State q : s)
+	// 			if (q.accept) {
+	// 				r.accept = true;
+	// 				break;
+	// 			}
+	// 		for (int n = 0; n < points.length; n++) {
+	// 			Set<State> p = new HashSet<State>();
+	// 			for (State q : s)
+	// 				for (Transition t : q.transitions)
+	// 					if (t.kind == Transition.Kind.TRANSITION_CHAR && t.min <= points[n] && points[n] <= t.max)
+	// 						p.add(t.to);
+	// 			if (!p.isEmpty()) {
+	// 				HashSet<State> pn = new HashSet<State>();
+	// 				for (State st : p)
+	// 					st.getEpsilonClosure(pn, true);
+	// 				p = pn;
+    //                 State q = newstate.get(p);
+    //                 if (q == null) {
+    //                     worklist.add(p);
+    //                     q = new State();
+    //                     newstate.put(p, q);
+    //                 }
+    //                 char min = points[n];
+    //                 char max;
+    //                 if (n + 1 < points.length)
+    //                     max = (char) (points[n + 1] - 1);
+    //                 else
+    //                     max = Character.MAX_VALUE;
+    //                 r.transitions.add(new Transition(min, max, q));
+    //             }
+	// 		}
+	// 	}
+	// 	a.deterministic = true;
+	// 	a.removeDeadTransitions();
+	// }
+	
+	// /**
+	//  * Equivalent to {@code simulateAllEpsilons(a, true)}.
+	//  * See {@link #simulateAllEpsilons(Automaton, boolean)}.
+	//  */
+	// public static void simulateAllEpsilons(Automaton a) {
+	// 	simulateAllEpsilons(a, true);
+	// }
+
+	// /**
+	//  * Replace all real epsilon transitions (and capture transitions if 
+	//  * {@code capture} is {@code true}) with simulated epsilon transitions.
+	//  */
+	// public static void simulateAllEpsilons(Automaton a, boolean capture) {
+	// 	HashMap<State, Boolean> dealed = new HashMap<State, Boolean>();
+	// 	LinkedList<State> workList = new LinkedList<State>();
+	// 	ArrayList<Transition> epsilonTransitions = new ArrayList<Transition>();
+	// 	workList.addLast(a.initial);
+	// 	dealed.put(a.initial, Boolean.FALSE);
+	// 	while (!workList.isEmpty()) {
+	// 		State s = workList.removeFirst();
+	// 		boolean done = true;
+	// 		for (Transition t : s .transitions) {
+	// 			Boolean td = dealed.get(t.to);
+	// 			if (td == null) {
+	// 				workList.addLast(t.to);
+	// 				dealed.put(t.to, Boolean.FALSE);
+	// 			}
+	// 			if (t.kind == Transition.Kind.TRANSITION_REALEPSILON || (capture && (
+	// 				t.kind == Transition.Kind.TRANSITION_CAPTURE_OPEN ||
+	// 				t.kind == Transition.Kind.TRANSITION_CAPTURE_CLOSE
+	// 			))) {
+	// 				if (td == null || !td.booleanValue())
+	// 					done = false;
+	// 				else
+	// 					epsilonTransitions.add(t);
+	// 			}
+	// 		}
+	// 		for (Transition t : epsilonTransitions) {
+	// 			s.transitions.remove(t);
+	// 			s.addSimulatedEpsilon(t.to);
+	// 		}
+	// 		epsilonTransitions.clear();
+	// 		if (done)
+	// 			dealed.put(s, Boolean.TRUE);
+	// 		else
+	// 			workList.addLast(s);
+	// 	}
+	// }
+
+	/**
+	 * Surround a automaton with capture group (opening transition and closing
+	 * transition).
+	 * @param a automaton.
+	 * @param group The capture group index.
+	 */
+	public static Automaton capture(Automaton a, int group) {
+		a = a.cloneExpanded();
+		State newInit = new State();
+		newInit.addTransition(new Transition(Transition.Kind.TRANSITION_CAPTURE_OPEN, group, a.initial));
+		a.initial = newInit;
+		State beforeAccept = null;
+		Set<State> oldAccepts = a.getAcceptStates();
+		if (oldAccepts.size() == 1) {
+			beforeAccept = oldAccepts.iterator().next();
+			beforeAccept.accept = false;
+		} else {
+			beforeAccept = new State();
+			for (State s : oldAccepts) {
+				s.accept = false;
+				s.addEpsilon(beforeAccept);
+			}
+		}
+		State newAccept = new State();
+		newAccept.accept = true;
+		beforeAccept.addTransition(new Transition(Transition.Kind.TRANSITION_CAPTURE_CLOSE, group, newAccept));
+		a.deterministic = false;
+		return a;
 	}
 
 	/** 
@@ -558,23 +1017,176 @@ final public class BasicOperations {
 		a.checkMinimizeAlways();
 	}
 	
+	private static class StateBoolean {
+		State s;
+		boolean b;
+		StateBoolean() {}
+		StateBoolean(State s, boolean b) {
+			this.s = s;
+			this.b = b;
+		}
+	}
+
+	private static enum ResultBoolean {
+		FALSE,
+		TRUE,
+		ERROR
+	}
+
 	/**
 	 * Returns true if the given automaton accepts the empty string and nothing else.
 	 */
-	public static boolean isEmptyString(Automaton a) {
+	public static boolean isEmptyString(Automaton a) throws UnsupportedOperationException {
+		// if (a.isSingleton())
+		// 	return a.singleton.length() == 0;
+		// else
+		// 	return a.initial.accept && a.initial.transitions.isEmpty();
 		if (a.isSingleton())
-			return a.singleton.length() == 0;
-		else
-			return a.initial.accept && a.initial.transitions.isEmpty();
+			return a.singleton.isEmpty();
+		if (a.initial.accept && a.initial.transitions.isEmpty())
+			return true;
+		HashMap<State, Boolean> onlyEpsReach = new HashMap<State, Boolean>();
+		ArrayDeque<StateBoolean> worklist = new ArrayDeque<StateBoolean>();
+		onlyEpsReach.put(a.initial, Boolean.TRUE);
+		worklist.addLast(new StateBoolean(a.initial, true));
+		boolean acceptEps = false;
+		while (!worklist.isEmpty()) {
+			StateBoolean sb = worklist.removeLast();
+			if (sb.s.accept) {
+				if (sb.b)
+					acceptEps = true;
+				else
+					return false;
+			}
+			for (Transition t : sb.s.transitions) {
+				boolean onlyEps = true;
+				switch (t.kind) {
+					case TRANSITION_CHAR:
+						onlyEps = false;
+						break;
+					case TRANSITION_BACKREF:
+						throw new UnsupportedOperationException("isEmptyString() currently unsupport automaton with backref");
+					case TRANSITION_REALEPSILON:
+					case TRANSITION_CAPTURE_OPEN:
+					case TRANSITION_CAPTURE_CLOSE:
+					default:
+						onlyEps = sb.b;
+				}
+				Boolean cachedOnlyEps = onlyEpsReach.get(t.to);
+				if (
+					cachedOnlyEps == null ||
+					(cachedOnlyEps.booleanValue() && !onlyEps)
+				) {
+					onlyEpsReach.put(t.to, Boolean.valueOf(onlyEps));
+					worklist.addLast(new StateBoolean(t.to, onlyEps));
+				}
+			}
+		}
+		return acceptEps;
+	}
+
+	// /**
+	//  * Returns true if the given automaton accepts the empty string and nothing else.
+	//  */
+	// public static boolean isEmptyString(Automaton a) throws UnsupportedOperationException {
+	// 	// if (a.isSingleton())
+	// 	// 	return a.singleton.length() == 0;
+	// 	// else
+	// 	// 	return a.initial.accept && a.initial.transitions.isEmpty();
+	// 	if (a.isSingleton())
+	// 		return a.singleton.isEmpty();
+	// 	if (a.initial.accept && a.initial.transitions.isEmpty())
+	// 		return true;
+	// 	HashMap<State, Boolean> onlyEpsReach = new HashMap<State, Boolean>();
+	// 	ArrayDeque<StateBoolean> worklist = new ArrayDeque<StateBoolean>();
+	// 	onlyEpsReach.put(a.initial, Boolean.TRUE);
+	// 	worklist.addLast(new StateBoolean(a.initial, true));
+	// 	boolean acceptEps = false;
+	// 	while (!worklist.isEmpty()) {
+	// 		StateBoolean sb = worklist.removeLast();
+	// 		if (sb.s.accept) {
+	// 			if (sb.b)
+	// 				acceptEps = true;
+	// 			else
+	// 				return false;
+	// 		}
+	// 		for (Transition t : sb.s.transitions) {
+	// 			boolean onlyEps = true;
+	// 			switch (t.kind) {
+	// 				case TRANSITION_CHAR:
+	// 					onlyEps = false;
+	// 					break;
+	// 				case TRANSITION_BACKREF:
+	// 					throw new UnsupportedOperationException("isEmptyString() currently unsupport automaton with backref");
+	// 				case TRANSITION_REALEPSILON:
+	// 				case TRANSITION_CAPTURE_OPEN:
+	// 				case TRANSITION_CAPTURE_CLOSE:
+	// 				default:
+	// 					onlyEps = sb.b;
+	// 			}
+	// 			Boolean cachedOnlyEps = onlyEpsReach.get(t.to);
+	// 			if (
+	// 				cachedOnlyEps == null ||
+	// 				(cachedOnlyEps.booleanValue() && !onlyEps)
+	// 			) {
+	// 				onlyEpsReach.put(t.to, Boolean.valueOf(onlyEps));
+	// 				worklist.addLast(new StateBoolean(t.to, onlyEps));
+	// 			}
+	// 		}
+	// 	}
+	// 	return acceptEps;
+	// }
+
+	private static boolean isSupportAndEmptyString(Automaton a) {
+		try {
+			return isEmptyString(a);
+		} catch (UnsupportedOperationException e) {
+			if (!e.getStackTrace()[0].getMethodName().equals("isEmptyString"))
+				throw e;
+			return false;
+		}
 	}
 
 	/**
 	 * Returns true if the given automaton accepts no strings.
 	 */
-	public static boolean isEmpty(Automaton a) {
+	public static boolean isEmpty(Automaton a) throws UnsupportedOperationException {
 		if (a.isSingleton())
 			return false;
-		return !a.initial.accept && a.initial.transitions.isEmpty();
+		// return !a.initial.accept && a.initial.transitions.isEmpty();
+		if (!a.initial.accept && a.initial.transitions.isEmpty())
+			return true;
+		boolean hasBackref = false;
+		HashSet<State> visited = new HashSet<State>();
+		ArrayDeque<State> worklist = new ArrayDeque<State>();
+		visited.add(a.initial);
+		worklist.addLast(a.initial);
+		while (!worklist.isEmpty()) {
+			State s = worklist.removeLast();
+			if (s.accept)
+				return false;
+			for (Transition t : s.transitions) {
+				if (t.kind == Transition.Kind.TRANSITION_BACKREF)
+					hasBackref = true;
+				else if (!visited.contains(t.to)) {
+					visited.add(t.to);
+					worklist.add(t.to);
+				}
+			}
+		}
+		if (hasBackref)
+			throw new UnsupportedOperationException("isEmpty() currently unsupport automaton with backref");
+		return true;
+	}
+
+	private static boolean isSupportAndEmpty(Automaton a) {
+		try {
+			return isEmpty(a);
+		} catch (UnsupportedOperationException e) {
+			if (!e.getStackTrace()[0].getMethodName().equals("isEmpty"))
+				throw e;
+			return false;
+		}
 	}
 	
 	/**
@@ -638,13 +1250,19 @@ final public class BasicOperations {
 	/**
 	 * Returns true if the given string is accepted by the automaton. 
 	 * <p>
-	 * Complexity: linear in the length of the string.
+	 * Complexity: 
+	 * <ul>
+	 * 	<li>for memory automaton, exponiential in the length of ths string.</li>
+	 * 	<li>for non-memory automaton, linear in the length of the string.</li>
+	 * </ul>
 	 * <p>
 	 * <b>Note:</b> for full performance, use the {@link RunAutomaton} class.
 	 */
 	public static boolean run(Automaton a, String s) {
 		if (a.isSingleton())
 			return s.equals(a.singleton);
+		if (a.memory)
+			return (new BacktrackAutomatonMatcher(s, a)).matches();
 		if (a.deterministic) {
 			State p = a.initial;
 			for (int i = 0; i < s.length(); i++) {

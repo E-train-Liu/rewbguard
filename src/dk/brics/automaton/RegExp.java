@@ -30,7 +30,11 @@
 package dk.brics.automaton;
 
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -42,23 +46,31 @@ import java.util.Set;
  * Regular expressions are built from the following abstract syntax:
  * <table border="0">
  * <tr><td><i>regexp</i></td><td>::=</td><td><i>unionexp</i></td><td></td><td></td></tr>
- * <tr><td></td><td>|</td><td></td><td></td><td></td></tr>
+ * <!--<tr><td></td><td>|</td><td></td><td></td><td></td></tr>-->
  *
  * <tr><td><i>unionexp</i></td><td>::=</td><td><i>interexp</i>&nbsp;<code><b>|</b></code>&nbsp;<i>unionexp</i></td><td>(union)</td><td></td></tr>
  * <tr><td></td><td>|</td><td><i>interexp</i></td><td></td><td></td></tr>
  *
  * <tr><td><i>interexp</i></td><td>::=</td><td><i>concatexp</i>&nbsp;<code><b>&amp;</b></code>&nbsp;<i>interexp</i></td><td>(intersection)</td><td><small>[OPTIONAL]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>estrexp</i></td><td></td><td></td></tr>
+ * 
+ * <tr><td><i>estrexp</i></td><td>::=</td><td></td><td>(empty string)</td><td><small>[EXTENDED]</small></td></tr>
  * <tr><td></td><td>|</td><td><i>concatexp</i></td><td></td><td></td></tr>
  *
  * <tr><td><i>concatexp</i></td><td>::=</td><td><i>repeatexp</i>&nbsp;<i>concatexp</i></td><td>(concatenation)</td><td></td></tr>
  * <tr><td></td><td>|</td><td><i>repeatexp</i></td><td></td><td></td></tr>
  *
- * <tr><td><i>repeatexp</i></td><td>::=</td><td><i>repeatexp</i>&nbsp;<code><b>?</b></code></td><td>(zero or one occurrence)</td><td></td></tr>
+ * <tr><td><i>repeatexp</i></td><td>::=</td><td><i>repeatexp</i>&nbsp;<code><b>*?</b></code></td><td>(zero or more occurrences, ungreedy)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>+?</b></code></td><td>(one or more occurrences, ungreedy)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>{</b><i>n</i><b>}?</b></code></td><td>(<code><i>n</i></code> occurrences, ungreedy)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>{</b><i>n</i><b>,}?</b></code></td><td>(<code><i>n</i></code> or more occurrences, ungreedy)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>{</b><i>n</i><b>,</b><i>m</i><b>}?</b></code></td><td>(<code><i>n</i></code> to <code><i>m</i></code> occurrences, including both, ungreedy)</td><td><small>[EXTENDED]</small></td></tr>
  * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>*</b></code></td><td>(zero or more occurrences)</td><td></td></tr>
  * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>+</b></code></td><td>(one or more occurrences)</td><td></td></tr>
  * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>{</b><i>n</i><b>}</b></code></td><td>(<code><i>n</i></code> occurrences)</td><td></td></tr>
  * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>{</b><i>n</i><b>,}</b></code></td><td>(<code><i>n</i></code> or more occurrences)</td><td></td></tr>
  * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>{</b><i>n</i><b>,</b><i>m</i><b>}</b></code></td><td>(<code><i>n</i></code> to <code><i>m</i></code> occurrences, including both)</td><td></td></tr>
+ * <tr><td></td><td>|</td><td><i>repeatexp</i>&nbsp;<code><b>?</b></code></td><td>(zero or one occurrence)</td><td></td></tr>
  * <tr><td></td><td>|</td><td><i>complexp</i></td><td></td><td></td></tr>
  *
  * <tr><td><i>complexp</i></td><td>::=</td><td><code><b>~</b></code>&nbsp;<i>complexp</i></td><td>(complement)</td><td><small>[OPTIONAL]</small></td></tr>
@@ -71,21 +83,64 @@ import java.util.Set;
  * <tr><td><i>charclasses</i></td><td>::=</td><td><i>charclass</i>&nbsp;<i>charclasses</i></td><td></td><td></td></tr>
  * <tr><td></td><td>|</td><td><i>charclass</i></td><td></td><td></td></tr>
  *
- * <tr><td><i>charclass</i></td><td>::=</td><td><i>charexp</i>&nbsp;<code><b>-</b></code>&nbsp;<i>charexp</i></td><td>(character range, including end-points)</td><td></td></tr>
+ * <tr><td><i>charclass</i></td><td>::=</td><td><i>charcateshort</i></td><td></td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>unicodecharclass</i></td><td></td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>posixcharcate</i></code></td><td>(posix style named char category)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>charexp</i>&nbsp;<code><b>-</b></code>&nbsp;<i>charexp</i></td><td>(character range, including end-points)</td><td></td></tr>
  * <tr><td></td><td>|</td><td><i>charexp</i></td><td></td><td></td></tr>
+ * 
+ * <tr><td><i>posixcharcate</i></td><td>::=</td><td><code><b>[:</b></code>&lt;posix char category name&gt;<code><b>:]</b></code></td><td>(posix style named char category)</td><td><small>[EXTENDED]</small></td></tr></tr>
+ * <tr><td></td><td>|</td><td><code><b>[:^</b></code>&lt;posix char category name&gt;<code><b>:]</b></code></td><td>(negated posix style named char category)</td><td><small>[EXTENDED]</small></td></tr></tr>
+ * 
  *
- * <tr><td><i>simpleexp</i></td><td>::=</td><td><i>charexp</i></td><td></td><td></td></tr>
- * <tr><td></td><td>|</td><td><code><b>.</b></code></td><td>(any single character)</td><td></td></tr>
+ * <tr><td><i>simpleexp</i></td><td>::=</td><td><code><b>.</b></code></td><td>(any single character)</td><td></td></tr>
  * <tr><td></td><td>|</td><td><code><b>#</b></code></td><td>(the empty language)</td><td><small>[OPTIONAL]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>&bsol;\u2205</b></code></td><td>(the empty language)</td><td><small>[EXTENDED][OPTIONAL]</small></td></tr>
  * <tr><td></td><td>|</td><td><code><b>@</b></code></td><td>(any string)</td><td><small>[OPTIONAL]</small></td></tr>
- * <tr><td></td><td>|</td><td><code><b>"</b></code>&nbsp;&lt;Unicode string without double-quotes&gt;&nbsp;<code><b>"</b></code></td><td>(a string)</td><td></td></tr>
- * <tr><td></td><td>|</td><td><code><b>(</b></code>&nbsp;<code><b>)</b></code></td><td>(the empty string)</td><td></td></tr>
- * <tr><td></td><td>|</td><td><code><b>(</b></code>&nbsp;<i>unionexp</i>&nbsp;<code><b>)</b></code></td><td>(precedence override)</td><td></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>"</b></code>&nbsp;&lt;Unicode string without double-quotes&gt;&nbsp;<code><b>"</b></code></td><td>(a string)</td><td><small>[OPTIONAL]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><i>groupexp</i></td><td></td><td><small>[EXTENDED]</small></td></tr>
  * <tr><td></td><td>|</td><td><code><b>&lt;</b></code>&nbsp;&lt;identifier&gt;&nbsp;<code><b>&gt;</b></code></td><td>(named automaton)</td><td><small>[OPTIONAL]</small></td></tr>
  * <tr><td></td><td>|</td><td><code><b>&lt;</b><i>n</i>-<i>m</i><b>&gt;</b></code></td><td>(numerical interval)</td><td><small>[OPTIONAL]</small></td></tr>
- *
- * <tr><td><i>charexp</i></td><td>::=</td><td>&lt;Unicode character&gt;</td><td>(a single non-reserved character)</td><td></td></tr>
- * <tr><td></td><td>|</td><td><code><b>\</b></code>&nbsp;&lt;Unicode character&gt;&nbsp;</td><td>(a single character)</td><td></td></tr>
+ * <tr><td></td><td>|</td><td><i>anchorexp</i></td><td>(anchor)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>backrefexp</i></td><td></td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>charcateshort</i></td><td></td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>charcateunicode</i></td><td></td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><i>charexp</i></td><td></td><td></td></tr>
+ * 
+ * <tr><td><i>anchorexp</i></td><td>::=</td><td><code><b>\</b></code>&nbsp;&lt;Any one of <code><b>bB</b></code>&gt;&nbsp;</td><td>(word border / not word border)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>^</b></code></td><td>(start of string / line)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>$</b></code></td><td>(end of string / line)</td><td><small>[EXTENDED]</small></td></tr>
+ * 
+ * <tr><td><i>backrefexp</i></td><td>::=</td><td><code><b>\</b></code>&nbsp;&lt;number&gt;&nbsp;</td><td>(backreference of the &lt;number&gt;th captured group)</td><td><small>[EXTENDED]</small></td></tr>
+ * 
+ * <tr><td><i>groupexp</i></td><td>::=</td><td><code><b>(?=</b></code> <i>unionexp</i> <code><b>)</b></code></td><td>(positive lookahead assertion)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>(?!</b></code> <i>unionexp</i> <code><b>)</b></code></td><td>(negative lookahead assertion)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>(?&lt;=</b></code> <i>unionexp</i> <code><b>)</b></code></td><td>(positive lookbehind assertion)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>(?&lt;!</b></code> <i>unionexp</i> <code><b>)</b></code></td><td>(negative lookbehind assertion)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>(?&gt;</b></code> <i>unionexp</i> <code><b>)</b></code></td><td>(atomic group)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>(?:</b></code>&nbsp;<code><b>)</b></code></td><td>(the empty string)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>(?:</b></code>&nbsp;<i>unionexp</i>&nbsp;<code><b>)</b></code></td><td>(precedence override / group uncapture)</td><td><small>[EXTENDED]</small></td></tr>
+ * <!--<tr><td></td><td>|</td><td><code><b>(</b></code>&nbsp;<code><b>)</b></code></td><td>(the empty string, captured)</td><td></td></tr>-->
+ * <tr><td></td><td>|</td><td><code><b>(</b></code>&nbsp;<i>unionexp</i>&nbsp;<code><b>)</b></code></td><td>(group capture)</td><td><small>[EXTENDED]</small></td></tr>
+ * 
+ * <tr><td><i>charcateshort</i></td><td>::=</td><td><code><b>\</b></code>&nbsp;&lt;Any one of <code><b>dDhHsSvVwW</b></code>&gt;</td><td>(named character class)</td><td><small>[EXTENDED]</small></td></tr>
+ * 
+ * <tr><td><i>charcateunicode</i></td><td>::=</td><td><code><b>\p{</b></code>&lt;unicode category name&gt;<code><b>}</b></code></td><td>(unicode character category)</td><td><small>[EXTENDED]</small></td>
+ * <tr><td></td><td>|</td><td><code><b>\P{</b></code>&lt;unicode category name&gt;<code><b>}</b></code></td><td>(negated unicode character category)</td><td><small>[EXTENDED]</small></td>
+ * <tr><td></td><td>|</td><td><code><b>\p{^</b></code>&lt;unicode category name&gt;<code><b>}</b></code></td><td>(negated unicode character category)</td><td><small>[EXTENDED]</small></td>
+ * <tr><td></td><td>|</td><td><code><b>\P{^</b></code>&lt;unicode category name&gt;<code><b>}</b></code></td><td>(unicode character category)</td><td><small>[EXTENDED]</small></td>
+ * <tr><td></td><td>|</td><td><code><b>\p</b></code>&lt;single-char unicode category name&gt;</td><td>(unicode character category)</td><td><small>[EXTENDED]</small></td>
+ * <tr><td></td><td>|</td><td><code><b>\P</b></code>&lt;single-char unicode category name&gt;</td><td>(negated unicode character category)</td><td><small>[EXTENDED]</small></td></tr>
+ * 
+ * <tr><td><i>charexp</i></td><td>::=</td><td><code><b>\</b></code>&nbsp;&lt;Any of <code><b>0aefnet</b></code>&gt;</td><td>(escaped character)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>\</b></code>&nbsp;&lt;oct&gt;&lt;oct&gt;&lt;oct&gt;&nbsp;</td><td>(character by octal unicode)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>\o{</b></code>&nbsp;&lt;oct number&gt;&nbsp;<code><b>}</b></code></td><td>(character by octal unicode)</td><td><small>[EXTENDED]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>\x</b></code>&nbsp;&lt;hex&gt;&lt;hex&gt;&nbsp;</td><td>(a single character by unicode)</td><td><small>[EXTENDED]</small></td></tr>
+  * <tr><td></td><td>|</td><td><code><b>\x{</b></code>&nbsp;&lt;hex number&gt;&nbsp;<code><b>}</b></code></td><td>(character by hex unicode)</td><td><small>[EXTENDED][OPTIONAL]</small></td></tr>
+  * <tr><td></td><td>|</td><td><code><b>&bsol;u</b></code>&nbsp;&lt;hex&gt;&lt;hex&gt;&lt;hex&gt;&lt;hex&gt;&nbsp;</td><td>(character by hex unicode)</td><td><small>[EXTENDED][OPTIONAL]</small></td></tr>
+ * <tr><td></td><td>|</td><td><code><b>\</b></code>&nbsp;&lt;Unicode character&gt;&nbsp;</td><td>(a single escaped character)</td><td></td></tr>
+ * <tr><td></td><td>|</td><td>&lt;Unicode character&gt;</td><td>(a single non-reserved character)</td><td></td></tr>
+ * 
  * </table>
  * <p>
  * The productions marked <small>[OPTIONAL]</small> are only allowed
@@ -104,7 +159,7 @@ import java.util.Set;
  * @author Anders M&oslash;ller &lt;<a href="mailto:amoeller@cs.au.dk">amoeller@cs.au.dk</a>&gt; 
  * */
 public class RegExp {
-	
+
 	enum Kind {
 		REGEXP_UNION,
 		REGEXP_CONCATENATION,
@@ -121,7 +176,21 @@ public class RegExp {
 		REGEXP_STRING,
 		REGEXP_ANYSTRING,
 		REGEXP_AUTOMATON,
-		REGEXP_INTERVAL
+		REGEXP_INTERVAL,
+		REGEXP_EMPTYSTRING,
+		REGEXP_REPEAT_UNGREEDY,
+		REGEXP_REPEAT_MIN_UNGREEDY,
+		REGEXP_REPEAT_MINMAX_UNGREEDY,
+		REGEXP_ANCHOR_WORDBORDER,
+		REGEXP_ANCHOR_NOT_WORDBORDER,
+		REGEXP_ANCHOR_LINE_START,
+		REGEXP_ANCHOR_LINE_END,
+		REGEXP_BACKREF,
+		REGEXP_CAPTURE,
+		REGEXP_LOOK_AHEAD,
+		REGEXP_LOOK_BEHIND,
+		REGEXP_ATOMIC,
+		REGEXP_CHAR_CATE_UNICODE
 	}
 	
 	/** 
@@ -153,6 +222,21 @@ public class RegExp {
 	 * Syntax flag, enables numerical intervals (<code>&lt;<i>n</i>-<i>m</i>&gt;</code>). 
 	 */
 	public static final int INTERVAL = 0x0020;
+
+	/**
+	 * Syntax flag, enables quoted string (<code>"</code>unicode string<code>"</code>) <small>[EXTENDED]</small>
+	 */
+	public static final int QUOTES = 0x0040;
+
+	/**
+	 * Syntax flag, enables JavaScript-like unicode escape (<code>&bsol;u</code>hhhh) <small>[EXTENDED]</small>
+	 */
+	public static final int JSESCAPE = 0x0080;
+
+	/**
+	 * Syntax flag, enables empty language (<code>&bsol;</code>\u2205) <small>[EXTENDED]</small>
+	 */
+	public static final int EMPTY2 = 0x0080;
 	
 	/** 
 	 * Syntax flag, enables all optional regexp syntax. 
@@ -172,6 +256,8 @@ public class RegExp {
 	char c;
 	int min, max, digits;
 	char from, to;
+	int group;
+	String cate;
 	
 	String b;
 	int flags;
@@ -199,13 +285,13 @@ public class RegExp {
 		b = s;
 		flags = syntax_flags;
 		RegExp e;
-		if (s.length() == 0)
-			e = makeString("");
-		else {
+		// if (s.length() == 0)
+		// 	e = makeString("");
+		// else {
 			e = parseUnionExp();
 			if (pos < b.length())
 				throw new IllegalArgumentException("end-of-string expected at position " + pos);
-		}
+		// }
 		kind = e.kind;
 		exp1 = e.exp1;
 		exp2 = e.exp2;
@@ -217,6 +303,7 @@ public class RegExp {
 		from = e.from;
 		to = e.to;
 		b = null;
+		renumberCaptureGroup(0);
 	}
 	
 	/** 
@@ -338,6 +425,9 @@ public class RegExp {
 			if (minimize)
 				a.minimize();
 			break;
+		case REGEXP_EMPTYSTRING:
+			a = BasicAutomata.makeEmptyString();
+			break;
 		case REGEXP_OPTIONAL:
 			a = exp1.toAutomaton(automata, automaton_provider, minimize).optional();
 			if (minimize)
@@ -398,6 +488,36 @@ public class RegExp {
 		case REGEXP_INTERVAL:
 			a = BasicAutomata.makeInterval(min, max, digits);
 			break;
+		// TODO: add real ungreedy repeat
+		case REGEXP_REPEAT_UNGREEDY:
+			a = exp1.toAutomaton(automata, automaton_provider, minimize).repeat();
+			if (minimize)
+				a.minimize();
+			break;
+		case REGEXP_REPEAT_MIN_UNGREEDY:
+			a = exp1.toAutomaton(automata, automaton_provider, minimize).repeat(min);
+			if (minimize)
+				a.minimize();
+			break;
+		case REGEXP_REPEAT_MINMAX_UNGREEDY:
+			a = exp1.toAutomaton(automata, automaton_provider, minimize).repeat(min, max);
+			if (minimize)
+				a.minimize();
+			break;
+		case REGEXP_CAPTURE:
+			a = exp1.toAutomaton(automata, automaton_provider, minimize).capture(group);
+			if (minimize)
+				a.minimize();
+			break;
+		case REGEXP_BACKREF:
+			a = BasicAutomata.makeBackref(group);
+			break;
+		case REGEXP_CHAR_CATE_UNICODE:
+			a = Datatypes.get(s);
+			break;
+		// TODO: support more regex -> automaton
+		default:
+			throw new UnsupportedOperationException("toAutomaton(): currently unsupport converting " + kind + " to automaton");
 		}
 		return a;
 	}
@@ -420,74 +540,225 @@ public class RegExp {
 		return toStringBuilder(new StringBuilder()).toString();
 	}
 
+	// StringBuilder toStringBuilder(StringBuilder b) {
+	// 	switch (kind) {
+	// 	case REGEXP_UNION:
+	// 		b.append("(");
+	// 		exp1.toStringBuilder(b);
+	// 		b.append("|");
+	// 		exp2.toStringBuilder(b);
+	// 		b.append(")");
+	// 		break;
+	// 	case REGEXP_CONCATENATION:
+	// 		exp1.toStringBuilder(b);
+	// 		exp2.toStringBuilder(b);
+	// 		break;
+	// 	case REGEXP_INTERSECTION:
+	// 		b.append("(");
+	// 		exp1.toStringBuilder(b);
+	// 		b.append("&");
+	// 		exp2.toStringBuilder(b);
+	// 		b.append(")");
+	// 		break;
+	// 	case REGEXP_OPTIONAL:
+	// 		b.append("(");
+	// 		exp1.toStringBuilder(b);
+	// 		b.append(")?");
+	// 		break;
+	// 	case REGEXP_REPEAT:
+	// 		b.append("(");
+	// 		exp1.toStringBuilder(b);
+	// 		b.append(")*");
+	// 		break;
+	// 	case REGEXP_REPEAT_MIN:
+	// 		b.append("(");
+	// 		exp1.toStringBuilder(b);
+	// 		b.append("){").append(min).append(",}");
+	// 		break;
+	// 	case REGEXP_REPEAT_MINMAX:
+	// 		b.append("(");
+	// 		exp1.toStringBuilder(b);
+	// 		b.append("){").append(min).append(",").append(max).append("}");
+	// 		break;
+	// 	case REGEXP_COMPLEMENT:
+	// 		b.append("~(");
+	// 		exp1.toStringBuilder(b);
+	// 		b.append(")");
+	// 		break;
+	// 	case REGEXP_CHAR:
+	// 		appendChar(c, b);
+	// 		break;
+	// 	case REGEXP_CHAR_RANGE:
+	// 		b.append("[\\").append(from).append("-\\").append(to).append("]");
+	// 		break;
+	// 	case REGEXP_ANYCHAR:
+	// 		b.append(".");
+	// 		break;
+	// 	case REGEXP_EMPTY:
+	// 		b.append("#");
+	// 		break;
+	// 	case REGEXP_STRING:
+	// 		if (s.indexOf('"') == -1) {
+	// 			b.append("\"").append(s).append("\"");
+	// 		} else {
+	// 			for (int i = 0; i < s.length(); i++) {
+	// 				appendChar(s.charAt(i), b);
+	// 			}
+	// 		}
+	// 		break;
+	// 	case REGEXP_ANYSTRING:
+	// 		b.append("@");
+	// 		break;
+	// 	case REGEXP_AUTOMATON:
+	// 		b.append("<").append(s).append(">");
+	// 		break;
+	// 	case REGEXP_INTERVAL:
+	// 		String s1 = Integer.toString(min);
+	// 		String s2 = Integer.toString(max);
+	// 		b.append("<");
+	// 		if (digits > 0)
+	// 			for (int i = s1.length(); i < digits; i++)
+	// 				b.append('0');
+	// 		b.append(s1).append("-");
+	// 		if (digits > 0)
+	// 			for (int i = s2.length(); i < digits; i++)
+	// 				b.append('0');
+	// 		b.append(s2).append(">");
+	// 		break;
+	// 	}
+	// 	return b;
+	// }
+
+
 	StringBuilder toStringBuilder(StringBuilder b) {
+		if (toCharClassStringBuilder(b) != null)
+			return b;
 		switch (kind) {
 		case REGEXP_UNION:
-			b.append("(");
-			exp1.toStringBuilder(b);
-			b.append("|");
-			exp2.toStringBuilder(b);
-			b.append(")");
-			break;
-		case REGEXP_CONCATENATION:
-			exp1.toStringBuilder(b);
-			exp2.toStringBuilder(b);
+			appendWithAutoGroup(b, exp1, kind, false);
+			b.append('|');
+			appendWithAutoGroup(b, exp2, kind, false);
 			break;
 		case REGEXP_INTERSECTION:
-			b.append("(");
-			exp1.toStringBuilder(b);
-			b.append("&");
-			exp2.toStringBuilder(b);
-			b.append(")");
+			appendWithAutoGroup(b, exp1, kind, false);
+			b.append('&');
+			appendWithAutoGroup(b, exp2, kind, false);
+			break;
+		case REGEXP_EMPTYSTRING:
+			break;
+		case REGEXP_CONCATENATION:
+			appendWithAutoGroup(b, exp1, kind, false);
+			appendWithAutoGroup(b, exp2, kind, false);
 			break;
 		case REGEXP_OPTIONAL:
-			b.append("(");
-			exp1.toStringBuilder(b);
-			b.append(")?");
+			// We need to add group braket even if they are at the same level
+			// E.g. add optional ? to a*, a*? change the meaning to ungreedy, (?:a*)? is OK.
+			appendWithAutoGroup(b, exp1, kind, true);
+			b.append('?');
 			break;
 		case REGEXP_REPEAT:
-			b.append("(");
-			exp1.toStringBuilder(b);
-			b.append(")*");
+		case REGEXP_REPEAT_UNGREEDY:
+			appendWithAutoGroup(b, exp1, kind, true);
+			b.append('*');
+			if (kind == Kind.REGEXP_REPEAT_UNGREEDY)
+				b.append('?');
 			break;
 		case REGEXP_REPEAT_MIN:
-			b.append("(");
-			exp1.toStringBuilder(b);
-			b.append("){").append(min).append(",}");
+		case REGEXP_REPEAT_MIN_UNGREEDY:
+			appendWithAutoGroup(b, exp1, kind, true);
+			if (min == 1)
+				b.append('+');
+			else
+				b.append('{').append(min).append(",}");
+			if (kind == Kind.REGEXP_REPEAT_MIN_UNGREEDY)
+				b.append('?');
 			break;
 		case REGEXP_REPEAT_MINMAX:
-			b.append("(");
-			exp1.toStringBuilder(b);
-			b.append("){").append(min).append(",").append(max).append("}");
+		case REGEXP_REPEAT_MINMAX_UNGREEDY:
+			appendWithAutoGroup(b, exp1, kind, true);
+			b.append('{');
+			if (min == max)
+				b.append(min);
+			else
+				b.append(min).append(',').append(max);
+			b.append('}');
+			if (kind == Kind.REGEXP_REPEAT_MINMAX_UNGREEDY)
+				b.append('?');
 			break;
 		case REGEXP_COMPLEMENT:
-			b.append("~(");
-			exp1.toStringBuilder(b);
-			b.append(")");
+			b.append('~');
+			appendWithAutoGroup(b, exp1, kind, false);
 			break;
+		// curretly not reachable due to toCharClassStringBuilder
 		case REGEXP_CHAR:
 			appendChar(c, b);
 			break;
+		// curretly not reachable due to toCharClassStringBuilder
 		case REGEXP_CHAR_RANGE:
-			b.append("[\\").append(from).append("-\\").append(to).append("]");
+			b.append('[');
+			appendChar(from, b);
+			b.append('-');
+			appendChar(to, b);
+			b.append(']');
 			break;
 		case REGEXP_ANYCHAR:
 			b.append(".");
 			break;
 		case REGEXP_EMPTY:
-			b.append("#");
+			// TODO: check whether this cause bug
+			// b.append("#");
+			b.append("\\\u2205");
 			break;
 		case REGEXP_STRING:
-			if (s.indexOf('"') == -1) {
-				b.append("\"").append(s).append("\"");
-			} else {
-				for (int i = 0; i < s.length(); i++) {
-					appendChar(s.charAt(i), b);
-				}
-			}
+			for (int i = 0; i < s.length(); i++)
+				appendChar(s.charAt(i), b);
 			break;
 		case REGEXP_ANYSTRING:
-			b.append("@");
+			// b.append("@");
+			b.append(".*");
+			break;
+		case REGEXP_LOOK_AHEAD:
+		case REGEXP_LOOK_BEHIND:
+			b.append(kind == Kind.REGEXP_LOOK_AHEAD ? "(?" : "(?<");
+			if (exp1.kind == Kind.REGEXP_COMPLEMENT) {
+				// (?!) or (?<!)
+				b.append('!');
+				exp1.exp1.toStringBuilder(b);
+			} else {
+				// (?=) or (?<=)
+				b.append('=');
+				exp1.toStringBuilder(b);
+			}
+			b.append(')');
+			break;
+		case REGEXP_ATOMIC:
+			b.append("(?>");
+			exp1.toStringBuilder(b);
+			b.append(')');
+			break;
+		case REGEXP_CAPTURE:
+			b.append('(');
+			exp1.toStringBuilder(b);
+			b.append(')');
+			break;
+		case REGEXP_BACKREF:
+			b.append('\\').append(group);
+			break;
+		case REGEXP_ANCHOR_WORDBORDER:
+			b.append("\\b");
+			break;
+		case REGEXP_ANCHOR_NOT_WORDBORDER:
+			b.append("\\B");
+			break;
+		case REGEXP_ANCHOR_LINE_START:
+			b.append('^');
+			break;
+		case REGEXP_ANCHOR_LINE_END:
+			b.append('$');
+			break;
+		// curretly not reachable due to toCharClassStringBuilder
+		case REGEXP_CHAR_CATE_UNICODE:
+			b.append("\\p{").append(s).append('}');
 			break;
 		case REGEXP_AUTOMATON:
 			b.append("<").append(s).append(">");
@@ -509,11 +780,269 @@ public class RegExp {
 		return b;
 	}
 
+	// @see https://stackoverflow.com/questions/220547/printable-char-in-java
+	// static boolean isPrintableChar(char c) {
+	// 	// TODO: check whether this solution is complete
+	// 	Character.UnicodeBlock block = Character.UnicodeBlock.of(c);
+	// 	return !Character.isISOControl(c) &&
+	// 		// c != KeyEvent.CHAR_UNDEFINED &&
+	// 		block != null &&
+	// 		block != Character.UnicodeBlock.SPECIALS;
+	// }
+	static boolean isPrintableChar(char c) {
+		// TODO: special for snort
+		return !Character.isISOControl(c) && c < '\u0080';
+	}
+
+	// private void appendChar(char c, StringBuilder b) {
+	// 	if ("|&?*+{},![]^-.#@\"()<>\\".indexOf(c) != -1) {
+	// 		b.append("\\");
+	// 	}
+	// 	b.append(c);
+	// }
+	
 	private void appendChar(char c, StringBuilder b) {
-		if ("|&?*+{},![]^-.#@\"()<>\\".indexOf(c) != -1) {
-			b.append("\\");
+		if ((check(INTERSECTION) && c == '&') ||
+			(check(COMPLEMENT) && c == '~') ||
+			(check(EMPTY) && c == '@') ||
+			(check(INTERVAL) && (c == '<' || c == '>')) ||
+			c == '/' || // TODO: only for snort regex 
+			"|?*+{},![]^$-.\"()\\".indexOf(c) != -1
+		)
+			b.append('\\').append(c);
+		else if ((int)c < CHAR_ESCAPE_TABLE.length && CHAR_ESCAPE_TABLE[(int)c] != EMPTY_CHAR)
+			b.append('\\').append(CHAR_ESCAPE_TABLE[(int)c]);
+		else if (!isPrintableChar(c)) {
+			int code = (int)c;
+			if (code <= 0x0F)
+				b.append("\\x0").append(Integer.toHexString(code));
+			else if (code <= 0xFF)
+				b.append("\\x").append(Integer.toHexString(code));
+			else if (code <= 0x0FFF)
+				b.append("\\x{0").append(Integer.toHexString(code)).append('}');
+			else
+				b.append("\\x{").append(Integer.toHexString(code)).append('}');
 		}
-		b.append(c);
+		else
+			b.append(c);
+	}
+
+	static final EnumMap<Kind, Integer> KIND_LEVEL_MAP = new EnumMap<Kind, Integer>(Kind.class);
+	static {
+		KIND_LEVEL_MAP.put(Kind.REGEXP_UNION, 1);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_INTERSECTION, 2);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_EMPTYSTRING, 3);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_CONCATENATION, 4);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_STRING, 4);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_REPEAT, 5);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_REPEAT_MIN, 5);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_REPEAT_MINMAX, 5);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_REPEAT_UNGREEDY, 5);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_REPEAT_MIN_UNGREEDY, 5);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_REPEAT_MINMAX_UNGREEDY, 5);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_OPTIONAL, 5);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_COMPLEMENT, 6);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_CHAR_RANGE, 7);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_ANYCHAR, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_EMPTY, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_ANYSTRING, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_LOOK_AHEAD, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_LOOK_BEHIND, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_LOOK_BEHIND, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_CAPTURE, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_ATOMIC, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_INTERVAL, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_ANCHOR_WORDBORDER, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_ANCHOR_NOT_WORDBORDER, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_ANCHOR_LINE_START, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_ANCHOR_LINE_END, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_BACKREF, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_CHAR_CATE_UNICODE, 8);
+		KIND_LEVEL_MAP.put(Kind.REGEXP_CHAR, 8);
+	}
+
+	/**
+	 * Append the child expression to <code>StringBuilder</code>. If the child expression
+	 * binds tighter than parent expression, add group braket around it to
+	 * avoid ambigurity.
+	 * 
+	 * @param b The <code>StringBuilder</code>.
+	 * @param e The child expression.
+	 * @param parentKind The kind of parent expression.
+	 * @param eq When child and parent is at the same level, whether add group braket.
+	 */
+	static void appendWithAutoGroup(StringBuilder b, RegExp e, Kind parentKind, boolean eq) {
+		StringBuilder charClass = e.toCharClassStringBuilder(new StringBuilder());
+		int childLevel = KIND_LEVEL_MAP.get(charClass != null ? Kind.REGEXP_CHAR_RANGE : e.kind);
+		int parentLevel = KIND_LEVEL_MAP.get(parentKind);
+		boolean group = childLevel < parentLevel || (eq && childLevel == parentLevel);
+		if (group)
+			b.append("(?:");
+		if (charClass != null)
+			b.append(charClass);
+		else
+			e.toStringBuilder(b);
+		if (group)
+			b.append(')');
+	}
+
+	
+	StringBuilder toCharClassStringBuilder(StringBuilder b) {
+		int originLen = b.length();
+		if (toCharClassCateBuilder(b, false) != null)
+			return b;
+		b.append('[');
+		RegExp root = this;
+		if (kind == Kind.REGEXP_INTERSECTION &&
+			exp1.kind == Kind.REGEXP_ANYCHAR &&
+			exp2.kind == Kind.REGEXP_COMPLEMENT
+		) {
+			b.append('^');  // [^...]
+			root = exp2.exp1;
+		}
+		ArrayDeque<RegExp> worklist = new ArrayDeque<RegExp>();
+		worklist.addLast(root);
+		while (!worklist.isEmpty()) {
+			RegExp exp = worklist.removeLast();
+			if (exp.kind == Kind.REGEXP_UNION) {
+				worklist.addLast(exp.exp2);
+				worklist.addLast(exp.exp1);
+			} else if (exp.toCharClassCateBuilder(b, true) == null) {
+				b.delete(originLen, b.length());
+				return null;
+			}
+		}
+		return b.append(']');
+	}
+
+	private StringBuilder toCharClassCateBuilder(StringBuilder b, boolean inCharClass) {
+		if (kind == Kind.REGEXP_CHAR) {
+			appendChar(c, b);
+			return b;
+		}
+		char ch = findCharCateShort(this);
+		if (ch != EMPTY_CHAR)
+			return b.append('\\').append(ch);
+		if (kind == Kind.REGEXP_CHAR_CATE_UNICODE)
+			return b.append("\\p{").append(s).append('}');
+		if (kind == Kind.REGEXP_INTERSECTION &&
+			exp1.kind == Kind.REGEXP_ANYCHAR &&
+			exp2.kind == Kind.REGEXP_COMPLEMENT &&
+			exp2.exp1.kind == Kind.REGEXP_CHAR_CATE_UNICODE
+		)
+			return b.append("\\P{").append(exp2.exp1.s).append('}');
+		if (inCharClass) {
+			for (Map.Entry<String, RegExp> entry : CHAR_CATE_POSIX_MAP.entrySet())
+				if (this == entry.getValue())
+					return b.append("[:").append(entry.getKey()).append(":]");
+			if (kind == Kind.REGEXP_CHAR_RANGE) {
+				appendChar(from, b);
+				b.append('-');
+				appendChar(to, b);
+				return b;
+			}
+		}
+		return null;
+	}
+
+	// /**
+	//  * If a expression is possibly parsed from a <i>charclassexp</i>,
+	//  * add pretty-printed escape or square bracket string to <code>b</code>
+	//  * instead of union/complement/char/char range;
+	//  * otherwise, append nothing and return <code>null</code>.
+	//  * 
+	//  * @param b string builder.
+	//  * @return Returns b if <code>this</code> is <i>charclassexp</i>, otherwise <code>null</code>.
+	//  */
+	// StringBuilder toCharClassStringBuilder(StringBuilder b) {
+	// 	FlattenCharClass fcc = flatCharClass();
+	// 	if (fcc == null)
+	// 		return null;
+	// 	if (fcc.singleton != null) {
+	// 		if (fcc.singleton.kind == Kind.REGEXP_CHAR) {
+	// 			appendChar(fcc.singleton.c, b);
+	// 			return b;
+	// 		} else if  {
+	// 			char name = findCharClassName(fcc.singleton);
+	// 			assert name != EMPTY_CHAR : 
+	// 				"FlattenCharClass.singleton must be a RegExp of kind REGEXP_CHAR or a named char class in RegExp.CHAR_CATE_SHORT_TABLE";
+	// 			return b.append('\\').append(name);
+	// 		}
+	// 	} else {
+	// 		b.append('[');
+	// 		if (fcc.negate)
+	// 			b.append('^');
+	// 		for (RegExp e : fcc.ranges) {
+	// 			char name = '\0';
+	// 			if (e.kind == Kind.REGEXP_CHAR)
+	// 				appendChar(e.c, b);
+	// 			else if ((name = findCharClassName(e)) != EMPTY_CHAR)
+	// 				b.append('\\').append(name);
+	// 			else if (e.kind == Kind.REGEXP_CHAR_RANGE) {
+	// 				appendChar(e.from, b);
+	// 				b.append('-');
+	// 				appendChar(e.to, b);
+	// 			}
+	// 			else
+	// 				throw new AssertionError("FlattenCharClass.ranges can only contain char, char range and named char class.");
+	// 		}
+	// 		return b.append(']');
+	// 	}
+	// }
+
+	// static class FlattenCharClass {
+	// 	RegExp singleton;
+	// 	boolean negate;
+	// 	List<RegExp> ranges;
+	// }
+
+	// FlattenCharClass flatCharClass() {
+	// 	FlattenCharClass res = new FlattenCharClass();
+	// 	RegExp root = null;
+	// 	if (kind == Kind.REGEXP_CHAR || 
+	// 		findCharClassName(this) != EMPTY_CHAR) {
+	// 		res.singleton = this;
+	// 		return res;
+	// 	} else if (kind == Kind.REGEXP_UNION || kind == Kind.REGEXP_CHAR_RANGE)
+	// 		// [...]
+	// 		root = this;
+	// 	else if (
+	// 		kind == Kind.REGEXP_INTERSECTION && 
+	// 		exp1.kind == Kind.REGEXP_ANYCHAR &&
+	// 		exp2.kind == Kind.REGEXP_COMPLEMENT
+	// 	) {
+	// 		// [^...]
+	// 		res.negate = true;
+	// 		root = exp2.exp1;
+	// 	} else
+	// 		return null;
+	// 	ArrayDeque<RegExp> stack = new ArrayDeque<RegExp>();
+	// 	stack.addLast(root);
+	// 	res.ranges = new ArrayList<RegExp>();
+	// 	while (!stack.isEmpty()) {
+	// 		RegExp node = stack.removeLast();
+	// 		if (
+	// 			node.kind == Kind.REGEXP_CHAR ||
+	// 			node.kind == Kind.REGEXP_CHAR_RANGE ||
+	// 			findCharClassName(node) != EMPTY_CHAR ||
+	// 			CHAR_CATE_UNICODE_MAP.containsValue(node)
+	// 		)
+	// 			res.ranges.add(node);
+	// 		else if (node.kind == Kind.REGEXP_UNION) {
+	// 			stack.addLast(node.exp2);
+	// 			stack.addLast(node.exp1);
+	// 		} else {
+	// 			return null;
+	// 		}
+	// 	}
+	// 	return res;
+	// }
+
+	static char findCharCateShort(RegExp cc) {
+		for (int i = 0, len = CHAR_CATE_SHORT_TABLE.length; i < len; ++i)
+			if (CHAR_CATE_SHORT_TABLE[i] == cc)
+				return (char)i;
+		return EMPTY_CHAR;
 	}
 
 	/** 
@@ -545,6 +1074,23 @@ public class RegExp {
 			break;
 		default:
 		}
+	}
+
+	public ArrayList<RegExp> findCapture() {
+		ArrayList<RegExp> list = new ArrayList<RegExp>();
+		ArrayDeque<RegExp> stack = new ArrayDeque<RegExp>();
+		list.add(this);
+		stack.addLast(this);
+		while (!stack.isEmpty()) {
+			RegExp e = stack.pollLast();
+			if (e.kind == Kind.REGEXP_CAPTURE)
+				list.add(e);
+			if (e.exp1 != null)
+				stack.addLast(e.exp1);
+			if (e.exp2 != null)
+				stack.addLast(e.exp2);
+		}
+		return list;
 	}
 
 	static RegExp makeUnion(RegExp exp1, RegExp exp2) {
@@ -629,6 +1175,30 @@ public class RegExp {
 		r.max = max;
 		return r;
 	}
+	
+	static RegExp makeRepeatUngreedy(RegExp exp) {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_REPEAT_UNGREEDY;
+		r.exp1 = exp;
+		return r;
+	}
+
+	static RegExp makeRepeatUngreedy(RegExp exp, int min) {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_REPEAT_MIN_UNGREEDY;
+		r.exp1 = exp;
+		r.min = min;
+		return r;
+	}
+
+	static RegExp makeRepeatUngreedy(RegExp exp, int min, int max) {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_REPEAT_MINMAX_UNGREEDY;
+		r.exp1 = exp;
+		r.min = min;
+		r.max = max;
+		return r;
+	}
 
 	static RegExp makeComplement(RegExp exp) {
 		RegExp r = new RegExp();
@@ -693,6 +1263,65 @@ public class RegExp {
 		return r;
 	}
 
+	static RegExp makeEmptyString() {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_EMPTYSTRING;
+		return r;
+	}
+
+	static RegExp makeNegateCharClass(RegExp exp) {
+		// @see #parseCharClassExp 
+		return makeIntersection(makeAnyChar(), makeComplement(exp));
+	}
+
+	static RegExp makeLookAhead(RegExp exp, boolean negate) {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_LOOK_AHEAD;
+		if (negate)
+			r.exp1 = makeComplement(exp);
+		else
+			r.exp1 = exp;
+		return r;
+	}
+
+	static RegExp makeLookBehind(RegExp exp, boolean negate) {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_LOOK_BEHIND;
+		if (negate)
+			r.exp1 = makeComplement(exp);
+		else
+			r.exp1 = exp;
+		return r;
+	}
+
+	static RegExp makeCapture(RegExp exp) {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_CAPTURE;
+		r.exp1 = exp;
+		return r;
+	}
+
+	static RegExp makeAtomic(RegExp exp) {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_ATOMIC;
+		r.exp1 = exp;
+		return r;
+	}
+
+	static RegExp makeBackref(int group) {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_BACKREF;
+		r.group = group;
+		return r;
+	}
+
+	static RegExp makeCharCateUnicode(String cate, boolean negate) {
+		RegExp r = new RegExp();
+		r.kind = Kind.REGEXP_CHAR_CATE_UNICODE;
+		r.s = cate;
+		return r;
+	}
+
 	private boolean peek(String s) {
 		return more() && s.indexOf(b.charAt(pos)) != -1;
 	}
@@ -729,10 +1358,17 @@ public class RegExp {
 	}
 
 	final RegExp parseInterExp() throws IllegalArgumentException {
-		RegExp e = parseConcatExp();
+		RegExp e = parseEStrExp();
 		if (check(INTERSECTION) && match('&'))
 			e = makeIntersection(e, parseInterExp());
 		return e;
+	}
+
+	final RegExp parseEStrExp() throws IllegalArgumentException {
+		if (pos >= b.length() || peek("|)"))
+			return makeEmptyString();
+		else
+			return parseConcatExp();
 	}
 
 	final RegExp parseConcatExp() throws IllegalArgumentException {
@@ -742,38 +1378,74 @@ public class RegExp {
 		return e;
 	}
 
+	// final RegExp parseRepeatExp() throws IllegalArgumentException {
+	// 	RegExp e = parseComplExp();
+	// 	while (peek("?*+{")) {
+	// 		if (match('*'))
+	// 			e = match('?') ? makeRepeatUngreedy(e) : makeRepeat(e);
+	// 		else if (match('+'))
+	// 			e = match('?') ? makeRepeatUngreedy(e, 1) : makeRepeat(e, 1);
+	// 		else if (match('{')) {
+	// 			int start = pos;
+	// 			while (peek("0123456789"))
+	// 				next();
+	// 			if (start == pos)
+	// 				throw new IllegalArgumentException("integer expected at position " + pos);
+	// 			int n = Integer.parseInt(b.substring(start, pos));
+	// 			int m = -1;
+	// 			if (match(',')) {
+	// 				start = pos;
+	// 				while (peek("0123456789"))
+	// 					next();
+	// 				if (start != pos)
+	// 					m = Integer.parseInt(b.substring(start, pos));
+	// 			} else
+	// 				m = n;
+	// 			if (!match('}'))
+	// 				throw new IllegalArgumentException("expected '}' at position " + pos);
+	// 			boolean ungreedy = match('?');
+	// 			if (m == -1)
+	// 				e = ungreedy ? makeRepeatUngreedy(e, n) : makeRepeat(e, n);
+	// 			else
+	// 				e = ungreedy ? makeRepeatUngreedy(e, n, m) : makeRepeat(e, n, m);
+	// 		}
+	// 		else if (match('?'))
+	// 			e = makeOptional(e);
+	// 	}
+	// 	return e;
+	// }
 	final RegExp parseRepeatExp() throws IllegalArgumentException {
 		RegExp e = parseComplExp();
 		while (peek("?*+{")) {
-			if (match('?'))
-				e = makeOptional(e);
-			else if (match('*'))
-				e = makeRepeat(e);
+			int origin = pos;
+			if (match('*'))
+				e = match('?') ? makeRepeatUngreedy(e) : makeRepeat(e);
 			else if (match('+'))
-				e = makeRepeat(e, 1);
+				e = match('?') ? makeRepeatUngreedy(e, 1) : makeRepeat(e, 1);
 			else if (match('{')) {
-				int start = pos;
-				while (peek("0123456789"))
-					next();
-				if (start == pos)
-					throw new IllegalArgumentException("integer expected at position " + pos);
-				int n = Integer.parseInt(b.substring(start, pos));
-				int m = -1;
-				if (match(',')) {
-					start = pos;
-					while (peek("0123456789"))
-						next();
-					if (start != pos)
-						m = Integer.parseInt(b.substring(start, pos));
-				} else
-					m = n;
-				if (!match('}'))
-					throw new IllegalArgumentException("expected '}' at position " + pos);
-				if (m == -1)
-					e = makeRepeat(e, n);
-				else
-					e = makeRepeat(e, n, m);
+				try {
+					int n = parseInt(10);
+					int m = -1;
+					if (match(',')) {			
+						if (!peek("}"))
+							m = parseInt(10);
+					}
+					else
+						m = n;
+					parseMatch('}');
+					boolean ungreedy = match('?');
+					if (m == -1)
+						e = ungreedy ? makeRepeatUngreedy(e, n) :  makeRepeat(e, n);
+					else
+						e = ungreedy ? makeRepeatUngreedy(e, n, m) : makeRepeat(e, n, m);
+				} catch (IllegalArgumentException err) {
+					pos = origin;
+					e = makeConcatenation(e, parseComplExp());
+					break;
+				}
 			}
+			else if (match('?'))
+				e = makeOptional(e);
 		}
 		return e;
 	}
@@ -792,7 +1464,8 @@ public class RegExp {
 				negate = true;
 			RegExp e = parseCharClasses();
 			if (negate)
-				e = makeIntersection(makeAnyChar(), makeComplement(e));
+				// e = makeIntersection(makeAnyChar(), makeComplement(e));
+				e = makeNegateCharClass(e);
 			if (!match(']'))
 				throw new IllegalArgumentException("expected ']' at position " + pos);
 			return e;
@@ -808,14 +1481,108 @@ public class RegExp {
 	}
 
 	final RegExp parseCharClass() throws IllegalArgumentException {
+		if (b.startsWith("[:", pos))
+			return parseCharCatePosix();
+		try { return parseCharCateShort(); } catch (IllegalArgumentException err) {}
+		try { return parseCharCateUnicode(); } catch (IllegalArgumentException err) {}
 		char c = parseCharExp();
 		if (match('-'))
 			if (peek("]"))
-                return makeUnion(makeChar(c), makeChar('-'));
-            else
-                return makeCharRange(c, parseCharExp());
+            	return makeUnion(makeChar(c), makeChar('-'));
+            	// return makeUnion(makeCharRange(c, c), makeCharRange('-', '-'));
+        	else
+            	return makeCharRange(c, parseCharExp());
 		else
 			return makeChar(c);
+			// return makeCharRange(c, c);
+	}
+
+	// @see https://www.pcre.org/original/doc/html/pcrepattern.html
+	final static RegExp[] CHAR_CATE_SHORT_TABLE = new RegExp[128];
+	static {
+		// d: decimal digit
+		CHAR_CATE_SHORT_TABLE[(int)'d'] = makeCharRange('0', '9'); // [0-9]
+		CHAR_CATE_SHORT_TABLE[(int)'D'] = makeNegateCharClass(CHAR_CATE_SHORT_TABLE[(int)'d']);
+		// h: horizontal white space
+		// CHAR_CATE_SHORT_TABLE[(int)'h'] = new RegExp("[\u0009\u0020\u00A0\u1680\u180E\u2000-\u200A\u202F\u205F\u3000]");
+		CHAR_CATE_SHORT_TABLE[(int)'h'] = makeUnion(makeChar('\t'), makeChar(' ')); // [\t ]
+		CHAR_CATE_SHORT_TABLE[(int)'H'] = makeNegateCharClass(CHAR_CATE_SHORT_TABLE[(int)'h']);
+		// v: vertical white space
+		// Note: java compiler preprocess uHHHH very early,
+		// so u000A (line feed) and u000D (carrage return) will become real char in source code and cause syntax error
+		// CHAR_CATE_SHORT_TABLE[(int)'v'] = new RegExp("[\n-\r\u0085\u2028-\u2029]");
+		CHAR_CATE_SHORT_TABLE[(int)'v'] = makeCharRange('\n', '\r'); // [\n-\r]
+		CHAR_CATE_SHORT_TABLE[(int)'V'] = makeNegateCharClass(CHAR_CATE_SHORT_TABLE[(int)'v']);
+		// s: white space
+		// CHAR_CATE_SHORT_TABLE[(int)'s'] = makeUnion(CHAR_CATE_SHORT_TABLE[(int)'h'], CHAR_CATE_SHORT_TABLE[(int)'v']);
+		CHAR_CATE_SHORT_TABLE[(int)'s'] = makeUnion(makeCharRange('\t', '\r'), makeChar(' '));
+		CHAR_CATE_SHORT_TABLE[(int)'S'] = makeNegateCharClass(CHAR_CATE_SHORT_TABLE[(int)'s']);
+		// w: word
+		CHAR_CATE_SHORT_TABLE[(int)'w'] = new RegExp("[0-9A-Z_a-z]");
+		CHAR_CATE_SHORT_TABLE[(int)'W'] = makeNegateCharClass(CHAR_CATE_SHORT_TABLE[(int)'w']);
+	}
+	final RegExp parseCharCateShort() throws IllegalArgumentException {
+		parseMatch('\\');
+		char c = next();
+		int ci = (int)c;
+		RegExp e = null;
+		if (ci >= CHAR_CATE_SHORT_TABLE.length || (e = CHAR_CATE_SHORT_TABLE[ci]) == null) {
+			pos -= 2;
+			throw new IllegalArgumentException("illegal char cate short name at position " + (pos + 1));
+		}
+		return e;
+	}
+
+	final static HashMap<String, RegExp> CHAR_CATE_POSIX_MAP = new HashMap<String, RegExp>();
+	static {
+		CHAR_CATE_POSIX_MAP.put("alnum", new RegExp("[0-9A-Za-z]"));
+		CHAR_CATE_POSIX_MAP.put("alpha",
+			makeUnion(makeCharRange('A', 'Z'), makeCharRange('a', 'z'))); // [A-Za-z]
+		CHAR_CATE_POSIX_MAP.put("ascii", makeCharRange('\0', '\u007F')); // [\0-\u007F]
+		CHAR_CATE_POSIX_MAP.put("blank", makeUnion(makeChar('\t'), makeChar(' '))); // [\t ]
+		CHAR_CATE_POSIX_MAP.put("cntrl",
+			makeUnion(makeCharRange('\0', '\u001F'), makeChar('\u007F'))); // [\0-\u001F\u007F-\u009F]
+		CHAR_CATE_POSIX_MAP.put("digit", makeCharRange('0', '9')); // [0-9]
+		CHAR_CATE_POSIX_MAP.put("graph", makeCharRange('\u0021', '\u007E')); // [\u0021-\u007E]
+		CHAR_CATE_POSIX_MAP.put("lower", makeCharRange('a', 'z')); // [a-z]
+		CHAR_CATE_POSIX_MAP.put("print", makeCharRange('\u0020', '\u007E')); // [\u0020-\u007E]
+		// CHAR_CATE_UNICODE_MAP.put("punct", new RegExp("[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~]"));
+		CHAR_CATE_POSIX_MAP.put("punct", new RegExp("[\u0021-\u002F\u003A-\u0040\u005B-\u0060\u007B-\u007E]"));
+		// CHAR_CATE_UNICODE_MAP.put("space", new RegExp("[\t\n\u000B\f\r ]"));
+		CHAR_CATE_POSIX_MAP.put("space", 
+			makeUnion(makeCharRange('\t', '\r'), makeChar(' '))); // [\t-\r ]
+		CHAR_CATE_POSIX_MAP.put("upper", makeCharRange('A', 'Z'));
+		CHAR_CATE_POSIX_MAP.put("upper", new RegExp("[0-9A-Z_a-z]"));
+		CHAR_CATE_POSIX_MAP.put("xdigit", new RegExp("[0-9A-Fa-f]"));
+		
+		HashMap<String, RegExp> negateMap = new HashMap<String, RegExp>();
+		for (Map.Entry<String, RegExp> entry : CHAR_CATE_POSIX_MAP.entrySet()) {
+			String name = '^' + entry.getKey();
+			RegExp regex = makeNegateCharClass(entry.getValue());
+			negateMap.put(name, regex);
+		}
+		CHAR_CATE_POSIX_MAP.putAll(negateMap);
+	}
+	final RegExp parseCharCatePosix() throws IllegalArgumentException {
+		int origin = pos;
+		try{
+			parseMatch('[');
+			parseMatch(':');
+			int nameBegin = pos;
+			while(next() != ':') {}
+			int nameEnd = pos - 1;
+			parseMatch(']');
+			if (nameEnd <= nameBegin)
+				throw new IllegalArgumentException("empty posix category name not allowed at position " + pos);
+			String name = b.substring(nameBegin, nameEnd);
+			RegExp r = CHAR_CATE_POSIX_MAP.get(name);
+			if (r == null)
+				throw new IllegalArgumentException("unknown posix category name at position " + pos);
+			return r;
+		} catch (IllegalArgumentException err) {
+			pos = origin;
+			throw err;
+		}
 	}
 
 	final RegExp parseSimpleExp() throws IllegalArgumentException {
@@ -823,22 +1590,28 @@ public class RegExp {
 			return makeAnyChar();
 		else if (check(EMPTY) && match('#'))
 			return makeEmpty();
+		else if (check(EMPTY2) && more() && b.startsWith("\\\u2205", pos)) {
+			pos += 2;
+			return makeEmpty();
+		}
 		else if (check(ANYSTRING) && match('@'))
 			return makeAnyString();
-		else if (match('"')) {
+		else if (check(QUOTES) && match('"')) {
 			int start = pos;
 			while (more() && !peek("\""))
 				next();
 			if (!match('"'))
 				throw new IllegalArgumentException("expected '\"' at position " + pos);
 			return makeString(b.substring(start, pos - 1));
-		} else if (match('(')) {
-			if (match(')'))
-				return makeString("");
-			RegExp e = parseUnionExp();
-			if (!match(')'))
-				throw new IllegalArgumentException("expected ')' at position " + pos);
-			return e;
+		} else if (peek("(")) {
+			return parseGroupExp();
+		// } else if (match('(')) {
+		// 	if (match(')'))
+		// 		return makeString("");
+		// 	RegExp e = parseUnionExp();
+		// 	if (!match(')'))
+		// 		throw new IllegalArgumentException("expected ')' at position " + pos);
+		// 	return e;
 		} else if ((check(AUTOMATON) || check(INTERVAL)) && match('<')) {
 			int start = pos;
 			while (more() && !peek(">"))
@@ -876,12 +1649,275 @@ public class RegExp {
 					throw new IllegalArgumentException("interval syntax error at position " + (pos - 1));
 				}
 			}
-		} else
-			return makeChar(parseCharExp());
+		} else {
+			try { return parseAnchorExp(); } catch (IllegalArgumentException err1) {}
+			try { return parseBackrefExp(); } catch (IllegalArgumentException err2) {}
+			try { return parseCharCateShort(); } catch (IllegalArgumentException err3) {}
+			try { return parseCharCateUnicode(); } catch (IllegalArgumentException err4) {}
+ 			return makeChar(parseCharExp());
+		}
 	}
 
+	final RegExp parseGroupExp() throws IllegalArgumentException {
+		parseMatch('(');
+		Kind kind = null;
+		boolean negate = false;
+		if (match('?')) {
+			if (match('=')) {
+				// (?=)
+				kind = Kind.REGEXP_LOOK_AHEAD;
+				negate = false;
+			} else if (match('!')) {
+				// (?!)
+				kind = Kind.REGEXP_LOOK_AHEAD;
+				negate = true;
+			} else if (match('<')) {
+				if (match('=')) {
+					// (?<=)
+					kind = Kind.REGEXP_LOOK_BEHIND;
+					negate = false;
+				} else if (match('!')) {
+					// (?<!)
+					kind = Kind.REGEXP_LOOK_BEHIND;
+					negate = true;
+				}
+			} else if (match('>'))
+				// (?>)
+				kind = Kind.REGEXP_ATOMIC;
+			else if (match(':'))
+				// (?:)
+				// non capture group is not a special node
+				// insteadit just change the level, group a unionexp 
+				kind = Kind.REGEXP_UNION;
+		} else
+			// ()
+			kind = Kind.REGEXP_CAPTURE;
+
+		if (kind == null)
+			throw new IllegalArgumentException("unsuported group at position " + pos);
+		
+		RegExp e;
+		if (match(')'))
+			e = makeEmpty();
+		else {
+			e = parseUnionExp();
+			parseMatch(')');
+		}
+
+		switch (kind) {
+		case REGEXP_LOOK_AHEAD:
+			return makeLookAhead(e, negate);
+		case REGEXP_LOOK_BEHIND:
+			return makeLookBehind(e, negate);
+		case REGEXP_ATOMIC:
+			return makeAtomic(e);
+		case REGEXP_CAPTURE:
+			return makeCapture(e);
+		case REGEXP_UNION:
+		default:
+			return e;
+		}
+	}
+
+	final RegExp parseAnchorExp() throws IllegalArgumentException {
+		int origin = pos;
+		Kind kind = null;
+		if (match('\\')) {
+			if (match('b'))
+				kind = Kind.REGEXP_ANCHOR_WORDBORDER;
+			else if (match('B'))
+				kind = Kind.REGEXP_ANCHOR_NOT_WORDBORDER;
+		}
+		else if (match('^'))
+			kind = Kind.REGEXP_ANCHOR_LINE_START;
+		else if (match('$'))
+			kind = Kind.REGEXP_ANCHOR_LINE_END;
+		if (kind == null) {
+			pos = origin;
+			throw new IllegalArgumentException("expect anchor at position " + pos);
+		}
+		RegExp e = new RegExp();
+		e.kind = kind;
+		return e;
+	}
+
+	final RegExp parseBackrefExp() throws IllegalArgumentException {
+		int origin = pos;
+		parseMatch('\\');
+		try {
+			int num = parseInt(10);
+			if (num == 0)
+				throw new IllegalArgumentException("backreference number cannot be 0 at position " + pos);
+			return makeBackref(num);
+		} catch (IllegalArgumentException err) {
+			pos = origin;
+			throw new IllegalArgumentException("except valid backreference number at position " + pos, err);
+		}
+	}
+
+	final RegExp parseCharCateUnicode() throws IllegalArgumentException {
+		int origin = pos;
+		try {
+			String cate = null;
+			boolean negate = false;
+			char ch = '\0';
+			parseMatch('\\');
+			ch = next();
+			if (ch != 'p' && ch != 'P')
+				throw new IllegalArgumentException("expected 'p' or 'P' for unicode char cate at position " + pos);
+			negate = (ch == 'P');
+			ch = next();
+			if (ch != '{')
+				cate = String.valueOf(c);
+			else {
+				int cateBegin = 0, cateEnd = 0;
+				ch = next();
+				if (ch == '}')
+					throw new IllegalArgumentException("unicode category name cannot be empty at position " + pos);
+				else if (ch == '^') {
+					negate = !negate;
+					cateBegin = pos;
+				} else
+					cateBegin = pos - 1;
+				while (next() != '}') {}
+				cateEnd = pos - 1;
+				if (cateEnd <= cateBegin)
+					throw new IllegalArgumentException("unicode category name cannot be empty at position " + pos);
+				cate = b.substring(cateBegin, cateEnd);
+			}
+			if (!Datatypes.isUnicodeBlockName(cate) && !Datatypes.isUnicodeCategoryName(cate))
+				throw new IllegalArgumentException("unknown unicode category name at position " + pos);
+			return makeCharCateUnicode(cate, negate);
+		} catch (IllegalArgumentException err) {
+			pos = origin;
+			throw err;
+		}
+	}
+
+	static final char EMPTY_CHAR = '\uFFFF';
+	private static final char[] ESCAPE_CHAR_TABLE = new char[128];
+	private static final char[] CHAR_ESCAPE_TABLE = new char[128];
+	static {
+		Arrays.fill(ESCAPE_CHAR_TABLE, EMPTY_CHAR);
+		ESCAPE_CHAR_TABLE[(int)'0'] = '\0';
+		ESCAPE_CHAR_TABLE[(int)'a'] = '\u0007';
+		ESCAPE_CHAR_TABLE[(int)'e'] = '\u001B';
+		ESCAPE_CHAR_TABLE[(int)'f'] = '\f';
+		ESCAPE_CHAR_TABLE[(int)'n'] = '\n';
+		ESCAPE_CHAR_TABLE[(int)'r'] = '\r';
+		ESCAPE_CHAR_TABLE[(int)'t'] = '\t';
+		Arrays.fill(CHAR_ESCAPE_TABLE, EMPTY_CHAR);
+		for (int i = 0, len = ESCAPE_CHAR_TABLE.length; i < len; ++i) {
+			char escape = (char)i;
+			char ch = ESCAPE_CHAR_TABLE[i];
+			if (ch != EMPTY_CHAR)
+				CHAR_ESCAPE_TABLE[(int)ch] = escape;
+		}
+	}
 	final char parseCharExp() throws IllegalArgumentException {
-		match('\\');
-		return next();
+		int origin = pos;
+		try{
+			boolean backslash = match('\\');
+			char c = next();
+			if (backslash) {
+				if (c == '0')
+					// \0 \0O or \0OO
+					c = (char)parseInt(8, 0, 2);
+				else if (c == 'o') {
+					// \o{OOO...}
+					parseMatch('{');
+					c = (char)parseInt(8);
+					parseMatch('}');
+				}
+				else if (c == 'x') {
+					// FIXME
+					if (/*!check(JSESCAPE) &&*/ match('{')) {
+						// \x{HHH...}
+						c = (char)parseInt(16);
+						parseMatch('}');
+					} else
+						// \xHH
+						c = (char)parseInt(16, 2);
+				// FIXME
+				} else if (/*check(JSESCAPE) &&*/ match('u'))
+					// \\uHHHH
+					c = (char)parseInt(16, 4);
+				else if ((int)c < ESCAPE_CHAR_TABLE.length && ESCAPE_CHAR_TABLE[(int)c] != EMPTY_CHAR)
+					c = ESCAPE_CHAR_TABLE[(int)c];
+			}
+			return c;
+		} catch (IllegalArgumentException err) {
+			pos = origin;
+			throw err;
+		}
+	}
+
+	final int parseDigit(int base) throws IllegalArgumentException {
+		char c = next();
+		int n = -1;
+		if (base <= 10) {
+			if ('0' <= c && c <= (char)('0' + base - 1))
+				n = c - '0';
+		}
+		else {
+			if ('0' <= c && c <= '9')
+				n = c - '0';
+			else if ('A' <= c && c <= (char)('A' + base - 10 - 1))
+				n = 10 + c - 'A';
+			else if ('a' <= c && c <= (char)('a' + base - 10 - 1))
+				n = 10 + c - 'a';
+		}
+		if (n == -1) {
+			--pos;
+			throw new IllegalArgumentException("expect digit of base " + base + " at position " + pos);
+		}
+		return n;
+	}
+
+	final int parseInt(int base, int minDigits, int maxDigits)  throws IllegalArgumentException {
+		int origin = pos;
+		int n = 0;
+		int i = 0;
+		for (; i < maxDigits; ++i) {
+			int d = 0;
+			try {
+				d = parseDigit(base);
+			} catch (IllegalArgumentException err) {
+				if (i < minDigits) {
+					pos = origin;
+					throw new IllegalArgumentException("expect a " + minDigits + "-digit number of base " + base + " at position " + pos, err);
+				}
+				break;
+			}
+			n = base * n + d;
+			if (n < 0)
+				throw new IllegalArgumentException("integer too large, overflow");
+		}
+		return n;
+	}
+
+	final int parseInt(int base, int digits) {
+		return parseInt(base, digits, digits);
+	}
+
+	final int parseInt(int base) throws IllegalArgumentException {
+		return parseInt(base, 1, Integer.MAX_VALUE);
+	}
+
+	final void parseMatch(char c) throws IllegalArgumentException {
+		if (next() != c) {
+			--pos;
+			throw new IllegalArgumentException("expect '" + c + "' at position " + pos);
+		}
+	}
+
+	final int renumberCaptureGroup(int group) {
+		if (kind == Kind.REGEXP_CAPTURE)
+			this.group = ++group;
+		if (exp1 != null)
+			group = exp1.renumberCaptureGroup(group);
+		if (exp2 != null)
+			group = exp2.renumberCaptureGroup(group);
+		return group;
 	}
 }

@@ -46,38 +46,46 @@ class TransitionComparator implements Comparator<Transition>, Serializable {
 	 * Compares by (min, reverse max, to) or (to, min, reverse max). 
 	 */
 	public int compare(Transition t1, Transition t2) {
-		if (to_first) {
-			if (t1.to != t2.to) {
-				if (t1.to == null)
+		int kindComp = t1.kind.compareTo(t2.kind);
+		if (kindComp != 0)
+			return kindComp;
+		int toComp = 2;
+		if (to_first && (toComp = compareState(t1.to, t2.to)) != 0)
+			return toComp;
+		switch(t1.kind) {
+			case TRANSITION_CHAR:
+				if (t1.min < t2.min)
 					return -1;
-				else if (t2.to == null)
+				if (t1.min > t2.min)
 					return 1;
-				else if (t1.to.number < t2.to.number)
+				if (t1.max > t2.max)
 					return -1;
-				else if (t1.to.number > t2.to.number)
+				if (t1.max < t2.max)
 					return 1;
-			}
+				break;
+			case TRANSITION_CAPTURE_OPEN:
+			case TRANSITION_CAPTURE_CLOSE:
+			case TRANSITION_BACKREF:
+				if (t1.group < t2.group)
+					return -1;
+				if (t1.group > t2.group)
+					return 1;
+				break;
+			default:
+				break;
 		}
-		if (t1.min < t2.min)
-			return -1;
-		if (t1.min > t2.min)
-			return 1;
-		if (t1.max > t2.max)
-			return -1;
-		if (t1.max < t2.max)
-			return 1;
-		if (!to_first) {
-			if (t1.to != t2.to) {
-				if (t1.to == null)
-					return -1;
-				else if (t2.to == null)
-					return 1;
-				else if (t1.to.number < t2.to.number)
-					return -1;
-				else if (t1.to.number > t2.to.number)
-					return 1;
-			}
-		}
+		if (!to_first)
+			return compareState(t1.to, t2.to);
 		return 0;
+	}
+
+	private static int compareState(State s1, State s2) {
+		if (s1 == s2)
+			return 0;
+		if (s1 == null)
+			return -1;
+		if (s2 == null)
+			return 1;
+		return Integer.compare(s1.number, s2.number);
 	}
 }

@@ -11,6 +11,19 @@
 
 	<property name="public" value="${user.home}/public_html/${project}"/>
 
+	<property name="lib.dir" value="lib"/>
+
+	<path id="exp.lib.classpath">
+		<fileset dir="${lib.dir}">
+			<include name="json-*.jar"/>
+			<include name="sqlite-jdbc-*.jar"/>
+		</fileset>
+	</path>
+	<path id="exp.classpath">
+		<path refid="exp.lib.classpath" />
+		<pathelement location="antbuild" />
+	</path>
+
 	<target name="all" depends="jar,doc" />
 
 	<target name="compile">
@@ -92,4 +105,43 @@
 		<chmod dir="${public}" perm="go+x" includes="doc/**,doc" type="dir" />
 	</target>
 
+	<target name="compileExp" depends="compile,datatypes">
+		<javac
+			srcdir="exp" destdir="antbuild" classpathref="exp.classpath"
+			source="1.8" target="1.8"
+			optimize="off" debug="on" includeantruntime="false" />
+	</target>
+
+	<target name="exp" depends="compileExp">
+		<!--
+		<java classname="dk.brics.automaton.AnalyzeRegExp">
+			<classpath refid="exp.classpath"/>
+			<arg value="-q"/> <arg value="sqlite:data/exp/internet-regexes.sqlite:internet_regex.pattern"/>
+			<arg value="-r"/> <arg path="data/out/detect-purdue-internet.toml"/>
+			<arg value="-a"/> <arg path="data/out/detect-purdue-internet.toml"/>
+		</java>
+		-->
+		<!--
+		<java classname="dk.brics.automaton.AnalyzeRegExp">
+			<classpath refid="exp.classpath"/>
+			<arg value="-q"/> <arg value="sqlite:data/exp/regexes.sqlite:regex_entity.pattern"/>
+			<arg value="-r"/> <arg path="data/out/detect-purdue-regexes.toml"/>
+			<arg value="-a"/> <arg path="data/out/detect-purdue-regexes.toml"/>
+		</java>
+		-->
+		<!--
+		<java classname="dk.brics.automaton.AnalyzeRegExp">
+			<classpath refid="exp.classpath"/>
+			<arg value="-S"/> <arg path="data/exp/snort2-register-rules"/>
+			<arg value="-r"/> <arg path="data/out/detect-snort2-register.toml"/>
+			<arg value="-a"/> <arg path="data/out/atkre-snort2-register.toml"/>
+		</java>
+		-->
+		<java classname="dk.brics.automaton.AnalyzeRegExp">
+			<classpath refid="exp.classpath"/>
+			<arg value="-j"/> <arg path="data/exp/snort2-register-regexes.json"/>
+			<arg value="-r"/> <arg path="data/out/detect_snort2-register.toml"/>
+			<arg value="-a"/> <arg path="data/out/atkre_snort2-register.toml"/>
+		</java>
+	</target>
 </project>

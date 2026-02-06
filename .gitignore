@@ -9,3 +9,7 @@
 .settings*
 .classpath
 .project
+
+.vscode
+/data/out
+/lib

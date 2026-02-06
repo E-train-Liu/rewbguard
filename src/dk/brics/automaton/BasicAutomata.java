@@ -280,6 +280,23 @@ final public class BasicAutomata {
     }
 
 	/**
+	 * Return a new (memory nondeterministic) automaton that accept a 
+	 * backreference.
+	 * @param group capture group index of the backreference
+	 */
+	public static Automaton makeBackref(int group) {
+		Automaton a = new Automaton();
+		State init = new State();
+		State accept = new State();
+		init.addTransition(new Transition(Transition.Kind.TRANSITION_BACKREF, group, accept));
+		accept.setAccept(true);
+		a.setInitialState(init);
+		a.setMemory(true);
+		a.setDeterministic(false);
+		return a; 
+	}
+
+	/**
 	 * Constructs automaton that accept strings representing nonnegative integers
 	 * that are not larger than the given value.
 	 * @param n string representation of maximum value

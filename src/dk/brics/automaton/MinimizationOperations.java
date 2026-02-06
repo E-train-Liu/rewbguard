@@ -142,6 +142,7 @@ final public class MinimizationOperations {
 	}
 
 	private static <T> void initialize(ArrayList<T> list, int size) {
+		list.ensureCapacity(size);
 		for (int i = 0; i < size; i++)
 			list.add(null);
 	}
@@ -157,6 +158,7 @@ final public class MinimizationOperations {
 		State[] states = ss.toArray(new State[ss.size()]);
 		boolean[][] mark = new boolean[states.length][states.length];
 		ArrayList<ArrayList<HashSet<IntPair>>> triggers = new ArrayList<ArrayList<HashSet<IntPair>>>();
+		triggers.ensureCapacity(states.length);
 		for (int n1 = 0; n1 < states.length; n1++) {
 			ArrayList<HashSet<IntPair>> v = new ArrayList<HashSet<IntPair>>();
 			initialize(v, states.length);

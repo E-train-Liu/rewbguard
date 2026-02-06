@@ -30,6 +30,8 @@
 package dk.brics.automaton;
 
 import java.io.Serializable;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
@@ -108,7 +110,7 @@ public class State implements Serializable, Comparable<State> {
 	 */
 	public State step(char c) {
 		for (Transition t : transitions)
-			if (t.min <= c && c <= t.max)
+			if (t.kind == Transition.Kind.TRANSITION_CHAR && t.min <= c && c <= t.max)
 				return t.to;
 		return null;
 	}
@@ -121,14 +123,137 @@ public class State implements Serializable, Comparable<State> {
 	 */
 	public void step(char c, Collection<State> dest) {
 		for (Transition t : transitions)
-			if (t.min <= c && c <= t.max)
+			if (t.kind == Transition.Kind.TRANSITION_CHAR && t.min <= c && c <= t.max)
+				dest.add(t.to);
+	}
+	
+	/**
+	 * Performs look in epsilon-like transitions.
+	 * @param dest collection where destination states are store
+	 * @param capture whether capture open and capture close are treated as epsilon
+	 */
+	public void step(Collection<State> dest, boolean capture) {
+		for (Transition t : transitions)
+			if (
+				t.kind == Transition.Kind.TRANSITION_REALEPSILON ||
+				(capture && (
+					t.kind == Transition.Kind.TRANSITION_CAPTURE_OPEN ||
+					t.kind == Transition.Kind.TRANSITION_CAPTURE_CLOSE
+				))
+			)
 				dest.add(t.to);
 	}
 
+	/**
+	 * See {@link #step(Collection, boolean)}.
+	 * Same as {@code step(dest, false)}.
+	 */
+	public void step(Collection<State> dest) {
+		step(dest, false);
+	}
+
+	public void stepOverEpsilon(char c, Collection<State> dest) {
+		stepOverEpsilon(c, dest, false, null);
+	}
+
+	public void stepOverEpsilon(char c, Collection<State> dest, boolean capture) {
+		stepOverEpsilon(c, dest, capture, null);
+	}
+
+	public void stepOverEpsilon(char c, Collection<State> dest, boolean capture, Set<State> visited) {
+		if (visited == null)
+			visited = new HashSet<State>();
+		else if (visited.contains(this))
+			return;
+		ArrayList<State> epsClosure = new ArrayList<State>();
+		epsClosure.ensureCapacity(transitions.size() + 1);
+		epsClosure.add(this);
+		stepOverEpsilon(epsClosure, capture, visited);
+		ArrayList<State> charClosure = new ArrayList<State>();
+		for (State es : epsClosure) {
+			es.step(c, charClosure);
+			for (State ts : charClosure) {
+				if (!visited.contains(ts)) {
+					dest.add(ts);
+					ts.stepOverEpsilon(dest, capture, visited);
+				}
+			} 
+			charClosure.clear();
+		}
+	}
+
+	public void stepOverEpsilon(Collection<State> dest) {
+		stepOverEpsilon(dest, true);
+	}
+
+	public void stepOverEpsilon(Collection<State> dest, boolean capture) {
+		stepOverEpsilon(dest, capture, null);
+	}
+
+	public void stepOverEpsilon(Collection<State> dest, boolean capture, Set<State> visited) {
+		if (visited == null)
+			visited = new HashSet<State>();
+		else if (visited.contains(this))
+			return;
+		ArrayDeque<State> stack = new ArrayDeque<State>();
+		visited.add(this);
+		stack.addLast(this);
+		while (!stack.isEmpty()) {
+			State s = stack.removeLast();
+			for (Transition t : s.transitions) {
+				if ((
+					t.kind == Transition.Kind.TRANSITION_REALEPSILON || (
+						capture && (
+							t.kind == Transition.Kind.TRANSITION_CAPTURE_OPEN ||
+							t.kind == Transition.Kind.TRANSITION_CAPTURE_CLOSE
+						)
+					)
+				) && !visited.contains(t.to)) {
+					dest.add(t.to);
+					visited.add(t.to);
+					stack.addLast(t.to);
+				}
+			}
+		}
+	}
+
+	public void getEpsilonClosure(Collection<State> dest, boolean capture) {
+		dest.add(this);
+		stepOverEpsilon(dest, capture); 
+	}
+
+	public void getEpsilonClosure(Collection<State> dest) {
+		dest.add(this);
+		stepOverEpsilon(dest, true);
+	}
+
+	// public static class StateTreeIterator implements Iterator<State> {
+	// 	private final boolean dfs;
+	// 	private Deque<State> deque;
+	// 	private State prevState;
+	// 	StateTreeIterator(State initState, boolean dfs) {
+	// 		this.dfs = dfs;
+	// 		deque = dfs ? new ArrayDeque<State>() : new LinkedList<State>();
+	// 		prevState = null;
+	// 	}
+	// }
+
 	void addEpsilon(State to) {
+		// TODO: only for experiment
+		if (Automaton.epsilon_default_simulate)
+			addSimulatedEpsilon(to);
+		else
+			addRealEpsilon(to);
+	}
+
+	void addSimulatedEpsilon(State to) {
 		if (to.accept)
 			accept = true;
 		transitions.addAll(to.transitions);
+	}
+
+	void addRealEpsilon(State to) {
+		transitions.add(new Transition(to));
 	}
 	
 	/** Returns transitions sorted by (min, reverse max, to) or (to, min, reverse max) */

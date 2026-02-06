@@ -57,8 +57,11 @@ final public class SpecialOperations {
 			r.accept = false;
 		}
 		for (State r : states)
-			for (Transition t : r.getTransitions())
-				m.get(t.to).add(new Transition(t.min, t.max, r));
+			for (Transition t : r.getTransitions()) {
+				Transition tc = t.clone();
+				tc.to = r;
+				m.get(t.to).add(tc);
+			}
 		for (State r : states)
 			r.transitions = m.get(r);
 		// make new initial+final states

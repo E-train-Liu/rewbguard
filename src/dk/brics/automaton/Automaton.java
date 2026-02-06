@@ -118,13 +118,19 @@ public class Automaton implements Serializable, Cloneable {
 	
 	/** Singleton string. Null if not applicable. */
 	String singleton;
+
+	/** If ture, then this automaton is Memory Automaton */
+	boolean memory;
 	
 	/** Minimize always flag. */
 	static boolean minimize_always = false;
 	
 	/** Selects whether operations may modify the input automata (default: <code>false</code>). */
 	static boolean allow_mutation = false;
-	
+
+	/** Use {@link State#addSimulatedEpsilon} instead of {@link State#addRealEpsilon} for {@link State#addEpsilon}. */
+	static boolean epsilon_default_simulate = false;
+
 	/** Caches the <code>isDebug</code> state. */
 	static Boolean is_debug = null;
 	
@@ -139,6 +145,7 @@ public class Automaton implements Serializable, Cloneable {
 	public Automaton() {
 		initial = new State();
 		deterministic = true;
+		memory = false;
 		singleton = null;
 	}
 	
@@ -155,6 +162,13 @@ public class Automaton implements Serializable, Cloneable {
 	static public void setMinimization(int algorithm) {
 		minimization = algorithm;
 	}
+
+	/** 
+	 * Return the current minimization algorithm (default: <code>MINIMIZE_HOPCROFT</code>).
+	 */
+	static public int getMinimization() {
+		return minimization;
+	}
 	
 	/**
 	 * Sets or resets minimize always flag.
@@ -165,6 +179,17 @@ public class Automaton implements Serializable, Cloneable {
 	 */
 	static public void setMinimizeAlways(boolean flag) {
 		minimize_always = flag;
+	}
+
+	/**
+	 * Returns the current state of minimize always flag.
+	 * If this flag is set, then {@link #minimize()} will automatically
+	 * be invoked after all operations that otherwise may produce non-minimal automata.
+	 * By default, the flag is not set.
+	 * @return current value of the flag
+	 */
+	static public boolean getMinimizeAlways() {
+		return minimize_always;
 	}
 	
 	/**
@@ -188,8 +213,31 @@ public class Automaton implements Serializable, Cloneable {
 	 * By default, the flag is not set.
 	 * @return current value of the flag
 	 */
-	static boolean getAllowMutate() {
+	static public boolean getAllowMutate() {
 		return allow_mutation;
+	}
+
+	/**
+	 * Set the "epsilon by default is simulated" flag.
+	 * If the flag is set, {@link State#addEpsilon} will use
+	 * {@link State#addSimulatedEpsilon}, otherwise {@link State#addRealEpsilon}.
+	 * By default, the flag is not set. This is a breaking change since the
+	 * original dk.brics.automaton only have simulated epsilon.
+	 * @param flag if true, the flag is set
+	 */
+	static public void setEpsilonDefaultSimulate(boolean flag) {
+		epsilon_default_simulate = flag;
+	}
+
+	/**
+	 * Return the state of "epsilon by default is simulated" flag.
+	 * If the flag is set, {@link State#addEpsilon} will use
+	 * {@link State#addSimulatedEpsilon}, otherwise {@link State#addRealEpsilon}.
+	 * By default, the flag is not set. This is a breaking change since the
+	 * original dk.brics.automaton only have simulated epsilon.
+	 */
+	static public boolean isEpsilonDefaultSimulate() {
+		return epsilon_default_simulate;
 	}
 	
 	void checkMinimizeAlways() {
@@ -247,7 +295,62 @@ public class Automaton implements Serializable, Cloneable {
 	public void setDeterministic(boolean deterministic) {
 		this.deterministic = deterministic;
 	}
-	
+
+	/**
+	 * Check whether this is actually a non-deterministic automaton.
+	 * @return {@code true} if the automaton is really non-deterministic, otherwise {@code false}.
+	 */
+	public boolean isActualDeterministic() {
+		for (State s : getStates()) {
+			for (Transition t1 : s.transitions) {
+				if (t1.kind != Transition.Kind.TRANSITION_CHAR)
+					return false;
+				for (Transition t2 : s.transitions) {
+					if (t1 == t2)
+						continue;
+					if (t2.kind != Transition.Kind.TRANSITION_CHAR)
+						return false;
+					// have overlap chars but go to different node
+					if (t1.min <= t2.max && t2.min <= t1.max) // && t1.to != t2.to
+						return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Return memory flag for this automaton
+	 * @return {@code true} if this may be memory automaton,
+	 *         {@code false} if this is definitely not memory automaton.
+	 */
+	public boolean isMemory() {
+		return memory;
+	}
+
+	/**
+	 * Sets memory flag for this automaton.
+	 * This method should (only) be used if automata are constructed manually.
+	 * @param memory {@code true} if this may be memory automaton,
+	 *               {@code false} if this is definitely not memory automaton.
+	 */
+	public void setMemory(boolean memory) {
+		this.memory = memory;
+	}
+
+	/**
+	 * Check whether this is actually a memory automaton by check whether
+	 * there are backref transitions.
+	 * @return {@code true} if there are backref transitions, otherwise {@code false}.
+	 */
+	public boolean isActualMemory() {
+		for (State s : getStates())
+			for (Transition t : s.transitions)
+				if (t.kind == Transition.Kind.TRANSITION_BACKREF)
+					return true;
+		return false;
+	}
+
 	/**
 	 * Associates extra information with this automaton. 
 	 * @param info extra information
@@ -338,7 +441,20 @@ public class Automaton implements Serializable, Cloneable {
 		s.transitions.add(new Transition(Character.MIN_VALUE, Character.MAX_VALUE, s));
 		for (State p : getStates()) {
 			int maxi = Character.MIN_VALUE;
+			List<Transition> l = p.getSortedTransitions(false);
+			boolean backref = false;
+			for (Transition t : l)
+				if (t.kind == Transition.Kind.TRANSITION_BACKREF) {
+					backref = true;
+					break;
+				}
+			if (backref) {
+				p.addEpsilon(s);
+				continue;
+			}
 			for (Transition t : p.getSortedTransitions(false)) {
+				if (t.kind != Transition.Kind.TRANSITION_CHAR)
+					continue;
 				if (t.min > maxi)
 					p.transitions.add(new Transition((char)maxi, (char)(t.min - 1), s));
 				if (t.max + 1 > maxi)
@@ -374,6 +490,10 @@ public class Automaton implements Serializable, Cloneable {
 			State p = null;
 			int min = -1, max = -1;
 			for (Transition t : st) {
+				if (t.kind != Transition.Kind.TRANSITION_CHAR) {
+					s.transitions.add(t);
+					continue;
+				}
 				if (p == t.to) {
 					if (t.min <= max + 1) {
 						if (t.max > max)
@@ -397,6 +517,46 @@ public class Automaton implements Serializable, Cloneable {
 		}
 		clearHashCode();
 	}
+
+	// TODO: Remove the old implementation when the new one is stable.
+	// public void reduce() {
+	// 	if (isSingleton())
+	// 		return;
+	// 	Set<State> states = getStates();
+	// 	setStateNumbers(states);
+	// 	for (State s : states) {
+	// 		List<Transition> st = s.getSortedTransitions(true);
+	// 		s.resetTransitions();
+	// 		Transition prevNewTran = null;
+	// 		for (Transition t : st) {
+	// 			if (prevNewTran == null || prevNewTran.kind != t.kind || prevNewTran.to != t.to) {
+	// 				if (prevNewTran != null)
+	// 					s.transitions.add(prevNewTran);
+	// 				prevNewTran = t;
+	// 			} else {
+	// 				if (t.kind == Transition.Kind.TRANSITION_CHAR) {
+	// 					if (t.min <= prevNewTran.max + 1) {
+	// 						if (t.max > prevNewTran.max)
+	// 							prevNewTran.max = t.max;
+	// 					} else {
+	// 						s.transitions.add(prevNewTran);
+	// 						prevNewTran = t;
+	// 					}
+	// 				} else { 
+	// 					// TRANSITION_CAPTURE_OPEN, TRANSITION_CAPTURE_CLOSE,
+	// 					// TRANSITION_BACKREF
+	// 					if (prevNewTran.group != t.group) {
+	// 						s.transitions.add(prevNewTran);
+	// 						prevNewTran = t;
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 		if (prevNewTran != null)
+	// 			s.transitions.add(prevNewTran);
+	// 	}
+	// 	clearHashCode();
+	// }
 	
 	/** 
 	 * Returns sorted array of all interval start points. 
@@ -406,6 +566,8 @@ public class Automaton implements Serializable, Cloneable {
 		pointset.add(Character.MIN_VALUE);
 		for (State s : getStates()) {
 			for (Transition t : s.transitions) {
+				if (t.kind != Transition.Kind.TRANSITION_CHAR)
+					continue;
 				pointset.add(t.min);
 				if (t.max < Character.MAX_VALUE)
 					pointset.add((char)(t.max + 1));
@@ -478,6 +640,28 @@ public class Automaton implements Serializable, Cloneable {
 			transitions[s.number] = s.getSortedTransitionArray(false);
 		return transitions;
 	}
+
+	/**
+	 * Returns an array {@code s} of {@link State} where {@code s[i].state == i}.
+	 * The states will be numbered if they are not properly numbered.
+	 */
+	static State[] getNumberStateArray(Set<State> states) {
+		boolean ok = true;
+		State[] stateArray = new State[states.size()];
+		for (State s : states) {
+			if (s.number < 0 || s.number >= stateArray.length || stateArray[s.number] != null) {
+				ok = false;
+				break;
+			}
+			stateArray[s.number] = s;
+		}
+		if (ok)
+			return stateArray;
+		setStateNumbers(states);
+		for (State s : states)
+			stateArray[s.number] = s;
+		return stateArray;
+	}
 	
 	/** 
 	 * Expands singleton representation to normal representation.
@@ -521,6 +705,34 @@ public class Automaton implements Serializable, Cloneable {
 		return c;
 	}
 	
+	private int getMaxGroupOf(boolean capture, boolean backref) {
+		if (isSingleton())
+			return 0;
+		Set<State> states = getStates();
+		int maxGroup = 0;
+		for (State s : states)
+			for (Transition t : s.transitions)
+				if ((
+					(capture && (t.kind == Transition.Kind.TRANSITION_CAPTURE_OPEN || t.kind == Transition.Kind.TRANSITION_CAPTURE_CLOSE)) ||
+					(backref && t.kind == Transition.Kind.TRANSITION_BACKREF) 
+				) && t.group > maxGroup)
+					maxGroup = t.group;
+		return maxGroup;
+	}
+
+	public int getMaxCaptureGroup() {
+		return getMaxGroupOf(true, false);
+	}
+
+	public int getMaxBackrefGroup() {
+		return getMaxGroupOf(false, true);
+
+	}
+
+	public int getMaxGroup() {
+		return getMaxGroupOf(true, true);
+	}
+
 	/**
 	 * Returns true if the language of this automaton is equal to the language
 	 * of the given automaton. Implemented using <code>hashCode</code> and
@@ -652,8 +864,11 @@ public class Automaton implements Serializable, Cloneable {
 					p.accept = s.accept;
 					if (s == initial)
 						a.initial = p;
-					for (Transition t : s.transitions)
-						p.transitions.add(new Transition(t.min, t.max, m.get(t.to)));
+					for (Transition t : s.transitions) {
+						Transition tc = t.clone();
+						tc.to = m.get(t.to);
+						p.transitions.add(tc);
+					}
 				}
 			}
 			return a;
@@ -914,6 +1129,13 @@ public class Automaton implements Serializable, Cloneable {
 	 */
 	public void determinize() {
 		BasicOperations.determinize(this);
+	}
+
+	/**
+	 * See {@link BasicOperations#capture(Automaton, int)}.
+	 */
+	public Automaton capture(int group) {
+		return BasicOperations.capture(this, group);
 	}
 
 	/** 
