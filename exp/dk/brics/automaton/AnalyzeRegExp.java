@@ -1,29 +1,16 @@
 package dk.brics.automaton;
 
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.io.PrintWriter;
-import java.io.StringWriter;
 import java.net.URISyntaxException;
-import java.net.URL;
-import java.nio.channels.ReadPendingException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.security.KeyStore.LoadStoreParameter;
 import java.sql.SQLException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Consumer;
-import java.util.function.Supplier;
 import java.util.logging.Logger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 
 public class AnalyzeRegExp {
@@ -603,8 +590,8 @@ public class AnalyzeRegExp {
                 out.print("vulnerable" + i + " = " + (attackAuto != null) + '\n');
             out.print("detectTimeNs" + i + " = " + detectTimeNs + '\n');
         }
-        if (result.rpattern.source != null)
-            out.print("source = " + DataLoadSave.toTomlString(result.rpattern.source) + '\n');
+        if (result.rpattern.sources != null)
+            out.print("sources = " + sourcesToTomlList(result.rpattern.sources) + '\n');
     }
 
     static void printAnalyzeAsAtkre(RegexAutomatonAnalyzeResult result, PrintStream out) {
@@ -654,10 +641,19 @@ public class AnalyzeRegExp {
                 "pump = " + DataLoadSave.toTomlString(pumpString) + '\n' +
                 "suffix = " + DataLoadSave.toTomlString(suffixString) + '\n' + 
                 (fenceString == null ? "" : ("fence = " + DataLoadSave.toTomlString(fenceString) + '\n')) +
-                (result.rpattern.source == null ? "" : ("source = " + DataLoadSave.toTomlString(result.rpattern.source) + '\n')) +
+                (result.rpattern.sources == null ? "" : ("sources = " + sourcesToTomlList(result.rpattern.sources) + '\n')) +
                 '\n'
             );
         }
+    }
+
+    private static String sourcesToTomlList(String[] sources) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[\n");
+        for (String s : sources)
+            sb.append("    ").append(DataLoadSave.toTomlString(s)).append(",\n");
+        sb.append(']');
+        return sb.toString();
     }
 
     static int getCaptureMax(RegExp exp) {

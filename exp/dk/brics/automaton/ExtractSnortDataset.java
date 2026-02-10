@@ -17,11 +17,10 @@ public class ExtractSnortDataset {
 		JSONArray json = new JSONArray();
 		StringBuilder toml = new StringBuilder();
 		for (RPattern rpattern : rpatterns) {
-			String[] sources = rpattern.source.split("\n");
 			JSONObject jsonObj = new JSONObject();
 			jsonObj.put("pattern", rpattern.pattern);
 			jsonObj.put("flags", rpattern.flags);
-			jsonObj.put("sources", sources);
+			jsonObj.put("sources", rpattern.sources);
 			json.put(jsonObj);
 
 			toml
@@ -29,7 +28,7 @@ public class ExtractSnortDataset {
 				.append("pattern = ").append(DataLoadSave.toTomlString(rpattern.pattern)).append('\n')
 				.append("flags = ").append(DataLoadSave.toTomlString(rpattern.flags)).append('\n')
 				.append("sources = [\n");
-			for (String source : sources)
+			for (String source : rpattern.sources)
 				toml.append("    ").append(DataLoadSave.toTomlString(source)).append(",\n");
 			toml.append("]\n\n");
 		}

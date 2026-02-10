@@ -9,16 +9,12 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.sql.Connection;
 import java.sql.DriverManager;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.IllegalFormatException;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -26,7 +22,6 @@ import java.util.regex.Pattern;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.sqlite.JDBC;
 
 
 public class DataLoadSave {
@@ -45,7 +40,7 @@ public class DataLoadSave {
 				for (; lastStart < matcher.start(); ++lastStart)
 					if (content.charAt(lastStart) == '\n')
 						++line;
-				rpatterns.add(new RPattern(pattern, flags, pathStr + ':' + line));
+				rpatterns.add(new RPattern(pattern, flags, new String[] {pathStr + ':' + line}));
 			}
 		}
 		return rpatterns;
@@ -80,7 +75,19 @@ public class DataLoadSave {
 		rpatterns.ensureCapacity(jsonArray.length());
 		for (int i = 0, n = jsonArray.length(); i < n; ++i) {
 			JSONObject jsonObj = jsonArray.getJSONObject(i);
-			rpatterns.add(new RPattern(jsonObj.getString("pattern"), null, pathStr + " [" + i + "]"));
+			String[] sources = null;
+			JSONArray sourceArray = jsonObj.optJSONArray("sources");
+			if (sourceArray != null) {
+				sources = new String[sourceArray.length()];
+				for (int j = 0; j < sources.length; ++j)
+					sources[j] = sourceArray.getString(j);
+			} else
+				sources = new String[] {pathStr + " [" + i + "]"};
+			rpatterns.add(
+				new RPattern(jsonObj.getString("pattern"),
+				jsonObj.optString("flags"),
+				sources
+			));
 		}
 		return rpatterns;
 	}
@@ -107,11 +114,19 @@ public class DataLoadSave {
 			if (flagsColumn != null) {
 				ResultSet rsData = stmtData.executeQuery("SELECT " + patternColumn + ", " +  flagsColumn + " FROM " + table);
 				while (rsData.next())
-					result.add(new RPattern(rsData.getString(1), rsData.getString(2), sourcePrefix + '[' + (i++) + ']'));
+					result.add(new RPattern(
+						rsData.getString(1),
+						rsData.getString(2),
+						new String[] {sourcePrefix + '[' + (i++) + ']'}
+					));
 			} else {
 				ResultSet rsData = stmtData.executeQuery("SELECT " + patternColumn + " FROM " + table);
 				while (rsData.next())
-					result.add(new RPattern(rsData.getString(1), null, sourcePrefix + '[' + (i++) + ']'));
+					result.add(new RPattern(
+						rsData.getString(1),
+						null,
+						new String[] {sourcePrefix + '[' + (i++) + ']'}
+					));
 			}
 			return result;
 		} finally {
@@ -251,10 +266,10 @@ public class DataLoadSave {
 			String full = rpattern.toString();
 			RPattern existing = existings.get(full);
 			if (existing != null) {
-				if (existing.source == null)
-					existing.source = rpattern.source;
-				else if (rpattern.source != null)
-					existing.source += '\n' + rpattern.source;
+				if (existing.sources == null)
+					existing.sources = rpattern.sources;
+				else if (rpattern.sources != null)
+					existing.sources = ArrayUtil.concat(existing.sources, rpattern.sources);
 			} else {
 				existing = rpattern.clone();
 				result.add(existing);

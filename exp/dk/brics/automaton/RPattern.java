@@ -3,12 +3,12 @@ package dk.brics.automaton;
 public class RPattern implements Cloneable {
     public String pattern;
     public String flags;
-    public String source;
+    public String[] sources;
 
-    public RPattern(String pattern, String flags, String source) {
+    public RPattern(String pattern, String flags, String[] sources) {
         this.pattern = pattern;
         this.flags = flags;
-        this.source = source;
+        this.sources = sources;
     }
     public RPattern(String pattern, String flags) {
         this(pattern, flags, null);
