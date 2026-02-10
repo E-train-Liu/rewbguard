@@ -39,13 +39,13 @@ First, download the `jar` file of
 [org.xerial.sqlite-jdbc](https://mvnrepository.com/artifact/org.xerial/sqlite-jdbc)
 under the [lib/](lib/) folder.
 
-Then, simply run the detector on Snort dataset.
+Then, simply compile and run the detector on Snort dataset
 
 ```sh
 ant exp
 ```
 
-If you want to run the detector on other datasets, please first comple the whole
+If you want to run the detector on other datasets, please first compile the whole
 codebase by
 
 ```sh
@@ -68,8 +68,16 @@ where possible input arguments include
 
 The building routines using Maven may be instable.
 
+To simply compile and run the detector on Snort dataset
+
+```sh
+mvn generate-test-resources
 ```
-mvn exec:java@analyze-regexp
+
+To only compile the codebase
+
+```sh
+mvn compile
 ```
 
 ## Copyright
