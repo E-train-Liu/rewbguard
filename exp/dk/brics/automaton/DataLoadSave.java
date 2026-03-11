@@ -13,6 +13,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -36,11 +37,24 @@ public class DataLoadSave {
 			int lastStart = 0, line = 1;
 			while (matcher.find()) {
 				String pattern = matcher.group(1);
-				String flags = matcher.group(2);
-				for (; lastStart < matcher.start(); ++lastStart)
+				String snortFlags = matcher.group(2);
+				StringBuilder flags = new StringBuilder(8);
+				for (int i = 0, length = snortFlags.length(); i < length; ++i) {
+					char flag = snortFlags.charAt(i);
+					if (flag == 'A' || flag == 'i' || flag == 's' || flag == 'm' || flag == 'x')
+						flags.append(flag);
+					// PCRE_DOLLAR_ENDONLY: Snort use 'E', PCRE and PHP use 'D'.
+					else if (flag == 'E')
+						flags.append('D');
+					// PCRE_UNGREEDY: Snort use 'G', PCRE and PHP use 'U'.
+					else if (flag == 'G')
+						flags.append('U');
+					// Other flags are Snort specific, do not include them.
+				}
+				for (int nextStart = matcher.start(); lastStart < nextStart; ++lastStart)
 					if (content.charAt(lastStart) == '\n')
 						++line;
-				rpatterns.add(new RPattern(pattern, flags, new String[] {pathStr + ':' + line}));
+				rpatterns.add(new RPattern(pattern, flags.toString(), new String[] {pathStr + ':' + line}));
 			}
 		}
 		return rpatterns;
@@ -60,6 +74,7 @@ public class DataLoadSave {
 				return FileVisitResult.CONTINUE;
 			}
 		});
+		Collections.sort(result);
 		return result;
 	}
 
@@ -263,7 +278,10 @@ public class DataLoadSave {
 		result.ensureCapacity(rpatterns.size());  // half
 		HashMap<String, RPattern> existings = new HashMap<String, RPattern>();
 		for (RPattern rpattern : rpatterns) {
-			String full = rpattern.toString();
+			char[] flagChars = rpattern.flags.toCharArray();
+			Arrays.sort(flagChars);
+			String flags = String.valueOf(flagChars);
+			String full = '/' + rpattern.pattern + '/' + flags;
 			RPattern existing = existings.get(full);
 			if (existing != null) {
 				if (existing.sources == null)
