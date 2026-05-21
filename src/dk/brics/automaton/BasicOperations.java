@@ -190,6 +190,7 @@ final public class BasicOperations {
 						if (t1.to == f1)
 							t1.to = initial2;
 				initial2.transitions.addAll(f1.transitions);
+				f1.accept = false;
 				states1.remove(f1);
 				// a1.deterministic = a1.deterministic || a2.deterministic;
 				// if (a1.deterministic) {

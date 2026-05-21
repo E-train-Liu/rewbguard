@@ -8,13 +8,22 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.logging.Logger;
 
 
 public class AnalyzeRegExp {
     static final long DETECT_IDA_TIMEOUT_NS = 1L * 60L * 1000_000_000L; // 1 minute
+
+    static final Logger LOGGER = Logger.getLogger(AnalyzeRegExp.class.getName());
 
     // public static class PCREData {
     //     public PCREData() {}
@@ -188,6 +197,12 @@ public class AnalyzeRegExp {
             if (atkrePS != null)
                 atkrePS.close();
         }
+        for (ExecutorService executor : ANAYLYZE_REGEX_AUTOMATON_EXECUTORS.values()) {
+            try {
+                executor.shutdown();
+                executor.awaitTermination(DETECT_IDA_TIMEOUT_NS, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException err) {}
+        }
     }
 
     private static class MainArg {
@@ -340,7 +355,7 @@ public class AnalyzeRegExp {
             if (reportPS != null)
                 printAnalyzeAsReport(result, i, reportPS);
             if (atkrePS != null)
-                printAnalyzeAsAtkre(result, atkrePS);
+                printAnalyzeAsAtkre(result, i, atkrePS);
             
             ++i;
         }
@@ -373,6 +388,7 @@ public class AnalyzeRegExp {
         System.out.print(total);
     }
 
+    private static HashMap<Long, ExecutorService> ANAYLYZE_REGEX_AUTOMATON_EXECUTORS = new HashMap<Long, ExecutorService>();
     static RegexAutomatonAnalyzeResult analyzeRegexAutomaton(RPattern rpattern) {
         RegexAutomatonAnalyzeResult result = new RegexAutomatonAnalyzeResult();
         RegExp regex = null;
@@ -405,20 +421,63 @@ public class AnalyzeRegExp {
                     return result;
                 }
             }
-            long startTime = System.nanoTime();
-            try {
-                result.attackAuto0 = SuperlinearDetector.detectOneIDAWithTimeout(auto, DETECT_IDA_TIMEOUT_NS);
-            } catch (TimeoutException | InterruptedException timeoItrpErr0) {
-                result.limitError = timeoItrpErr0;
-            } catch (UnsupportedOperationException detErr0) {
-                result.detectError0 = detErr0;
+            ExecutorService executor = ANAYLYZE_REGEX_AUTOMATON_EXECUTORS.get(
+                Thread.currentThread().getId()
+            );
+            if (executor == null) {
+                executor = Executors.newSingleThreadExecutor();
+                ANAYLYZE_REGEX_AUTOMATON_EXECUTORS.put(Thread.currentThread().getId(), executor);
             }
-            result.detectTimeNs0 = System.nanoTime() - startTime;
-            startTime = System.nanoTime();
+            Thread executorThread = null;
+            try {
+                executorThread = executor.submit(new Callable<Thread> () {
+                    @Override
+                    public Thread call() { return Thread.currentThread(); }
+                }).get();
+            } catch (ExecutionException | InterruptedException exeItErr) {
+                throw new RuntimeException("unexpected exception when gettting executor thread", exeItErr);
+            }
+            final Automaton finalAuto = auto;
+            Future<AttackAutomaton> future = executor.submit(new Callable<AttackAutomaton>() {
+                @Override
+                public AttackAutomaton call() throws InterruptedException {
+                    long startTimeIn = System.nanoTime();
+                    try{
+                        // FIXME
+                        return null;
+                        // return SuperlinearDetector.detectOneIDA(finalAuto);
+                    } finally {
+                        result.detectTimeNs0 = System.nanoTime() - startTimeIn;
+                    }
+                }
+            });
+            try {
+                result.attackAuto0 = future.get(DETECT_IDA_TIMEOUT_NS, TimeUnit.NANOSECONDS);
+            } catch (TimeoutException | InterruptedException timeoutItErr) {
+                // interrupt the thread and wait for the task end
+                executorThread.interrupt();
+                try {
+                    future.get();
+                } catch (InterruptedException itErr) {
+                    LOGGER.warning("executor timeout and task may be not ended");
+                } catch (ExecutionException exErr) {}
+                result.limitError = timeoutItErr;
+            } catch (ExecutionException exErr) {
+                Throwable e = exErr.getCause();
+                if (e instanceof UnsupportedOperationException)
+                    result.detectError0 = (UnsupportedOperationException) e;
+                else if (e instanceof InterruptedException)
+                    result.limitError = e;
+                else
+                    throw new RuntimeException(e);
+            }
+            long startTime = System.nanoTime();
             try {
                 result.attackAuto1 = SuperlinearDetector.detectOneBackrefToOverlapLoop(auto);
             } catch (UnsupportedOperationException detErr1) {
                 result.detectError1 = detErr1;
+            } catch (InterruptedException itrpErr1) {
+                result.limitError = itrpErr1;
             }
             result.detectTimeNs1 = System.nanoTime() - startTime;
             startTime = System.nanoTime();
@@ -426,6 +485,8 @@ public class AnalyzeRegExp {
                 result.attackAuto2 = SuperlinearDetector.detectOneOverlapLoopBeforeBackrefToLoop(auto);
             } catch (UnsupportedOperationException detErr2) {
                 result.detectError2 = detErr2;
+            } catch (InterruptedException itrpErr2) {
+                result.limitError = itrpErr2;
             }
             result.detectTimeNs2 = System.nanoTime() - startTime;
             startTime = System.nanoTime();
@@ -433,6 +494,8 @@ public class AnalyzeRegExp {
                 result.attackAuto3 = SuperlinearDetector.detectOneBackrefToLoopAndOverlapLoop(auto);
             } catch (UnsupportedOperationException detErr3) {
                 result.detectError3 = detErr3;
+            } catch (InterruptedException itrpErr3) {
+                result.limitError = itrpErr3;
             }
             result.detectTimeNs3 = System.nanoTime() - startTime;
         } catch (OutOfMemoryError oomErr) {
@@ -530,9 +593,8 @@ public class AnalyzeRegExp {
 
     static void printAnalyzeAsReport(RegexAutomatonAnalyzeResult result, int index, PrintStream out) {
         out.print(
-            "\n#" + index +
             "\n[[note]]\npattern = " + DataLoadSave.toTomlString(result.rpattern.pattern) + 
-            '\n'
+            "originIndex = " + index + '\n'
         );
         if (result.limitError != null) {
             out.print("limitError = '''\n");
@@ -594,7 +656,15 @@ public class AnalyzeRegExp {
             out.print("sources = " + sourcesToTomlList(result.rpattern.sources) + '\n');
     }
 
-    static void printAnalyzeAsAtkre(RegexAutomatonAnalyzeResult result, PrintStream out) {
+    static void printAnalyzeAsAtkre(RegexAutomatonAnalyzeResult result, int index, PrintStream out) {
+        Automaton auto;
+        try {
+            auto = removeAnchor(new RegExp(result.rpattern.pattern, RegExp.NONE)).toAutomaton(false);
+        } catch (IllegalArgumentException | UnsupportedOperationException err) {
+            return;
+        }
+        String[] captures = AutomatonUtil.getAutomatonCaptureStringLocalMin(auto);
+
         for (int i = 0; i <= 3; ++i) {
             AttackAutomaton attackAuto =
                 i == 0 ? result.attackAuto0 :
@@ -603,9 +673,11 @@ public class AnalyzeRegExp {
                 result.attackAuto3;
             if (attackAuto == null)
                 continue;
-            String prefixString = AutomatonUtil.getAutomatonStringLocalMin(attackAuto.prefix);
-            if (prefixString == null)
-                continue;
+            String prefixString = AutomatonUtil.getAutomatonStringLocalMin(attackAuto.prefix, false, captures);
+            if (prefixString == null) {
+                LOGGER.warning("cannot generate prefix string");
+                prefixString = "!!!!! ERROR: CANNOT GENERATE !!!!!";
+            }
             String pumpString = AutomatonUtil.getAutomatonStringLocalMin(attackAuto.pump, true);
             String suffixString = null;
             // try{
@@ -624,19 +696,27 @@ public class AnalyzeRegExp {
                     Automaton suffixCompl = attackAuto.suffix.complement();
                     suffixString = AutomatonUtil.getAutomatonStringLocalMin(suffixCompl);
                 } catch (UnsupportedOperationException err) {
-                    Logger.getLogger(AnalyzeRegExp.class.getName()).log(
+                    LOGGER.log(
                         java.util.logging.Level.WARNING,
                         "cannot generate a string from the complement of suffix automaton",
                         err
                     );
-                    suffixString = "!!!!!ERROR!!!!!";
+                    suffixString = "!!!!! ERROR: CANNOT GENERATE !!!!!";
                 }
             }
-            String fenceString = attackAuto.fence == null ? null :
-                AutomatonUtil.getAutomatonStringLocalMin(attackAuto.fence);
+            String fenceString = null;
+            if (attackAuto.fence != null) {
+                fenceString = AutomatonUtil.getAutomatonStringLocalMin(attackAuto.fence, false, captures);
+                if (fenceString == null) {
+                    LOGGER.warning("cannot generate fence string");
+                    fenceString = "!!!!! ERROR: CANNOT GENERATE !!!!!";
+                }
+            }
             out.print(
                 "[[exp]]\n" + 
                 "regex = " + DataLoadSave.toTomlString(result.rpattern.pattern) + '\n' +
+                "originIndex = " + index + '\n' +
+                "vul_type = " + i + '\n' +
                 "prefix = " + DataLoadSave.toTomlString(prefixString) + '\n' +
                 "pump = " + DataLoadSave.toTomlString(pumpString) + '\n' +
                 "suffix = " + DataLoadSave.toTomlString(suffixString) + '\n' + 

@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 
 public class AutomatonUtil{
     private static class StateCapture {
@@ -18,6 +19,13 @@ public class AutomatonUtil{
             this.state = state;
             this.captureP1 = captureP1;
             this.captureP2 = captureP2;
+        }
+        public StateCapture deepClone() {
+            return new StateCapture(
+                state,
+                captureP1 == null ? null : captureP1.clone(),
+                captureP2 == null ? null : captureP2.clone()
+            );
         }
     }
 
@@ -60,44 +68,41 @@ public class AutomatonUtil{
         }
     }
 
-    public static String getAutomatonStringLocalMin(Automaton auto, boolean tryAvoidEps) {
-        // FIXME
-        // System.out.println(auto.toDot());
-        HashSet<Integer> visited = new HashSet<Integer>();
+    public static String[] getAutomatonCaptureStringLocalMin(
+        Automaton auto,
+        boolean tryAvoidEps,
+        String[] captureP2
+    ) {
+        IdentityHashMap<Transition, Void> visited = new IdentityHashMap<Transition, Void>();
         ArrayDeque<StateCapture> worklist = new ArrayDeque<StateCapture>();
-        int nGroups = Math.max(auto.getMaxBackrefGroup(), auto.getMaxCaptureGroup());
-        StateCapture start = new StateCapture(auto.getInitialState(), nGroups);
-        start.captureP1[0] = "";
-        worklist.addLast(start);
-        // visited.add(auto.getInitialState());
-		boolean acceptEps = false;
+        String[] captureP1 = new String[captureP2.length];
+        captureP1[0] = "";
+        worklist.addLast(new StateCapture(
+            auto.getInitialState(), captureP1, captureP2
+        ));
+		String[] resultWithEps = null;
         while (!worklist.isEmpty()) {
             StateCapture stCap = worklist.removeLast();
-            // FIXME
-            // System.out.println("getAutomatonStringLocalMin: (" + stCap.state.number + ") " + stCap.captureP1[0]);
             if (stCap.state.accept) {
-                if (tryAvoidEps && stCap.captureP1[0].isEmpty())
-                    acceptEps = true;
+                String[] result = stCap.captureP2.clone();
+                result[0] = stCap.captureP1[0];
+                if (tryAvoidEps && result[0].isEmpty())
+                    resultWithEps = result;
                 else
-                    return stCap.captureP1[0];
+                    return result;
 			}
             Transition[] trans = stCap.state.getSortedTransitionArray(false);
             Arrays.sort(trans, new TransitionStringComparator(stCap.captureP2));
             for (int t = trans.length - 1; t >= 0; --t) {
                 Transition tran = trans[t];
-				int tranObjId = System.identityHashCode(tran); 
-				// FIXME
-				// System.out.println(tran);
-                if (visited.contains(tranObjId))
+                if (visited.containsKey(tran))
                     continue;
-                visited.add(tranObjId);
+                visited.put(tran, null);
                 // avoid copy for the first one transition
-                StateCapture newStCap = /*t == 0 ? stCap :*/ new StateCapture(null, stCap.captureP1, stCap.captureP2);
+                StateCapture newStCap = t == 0 ? stCap : stCap.deepClone();
                 newStCap.state = tran.getDest();
-                // copy on write
                 switch (tran.getKind()) {
                     case TRANSITION_CHAR:
-                        newStCap.captureP1 = stCap.captureP1.clone();
                         for (int g = 0; g < newStCap.captureP1.length; ++g)
                             if (newStCap.captureP1[g] != null)
                                 newStCap.captureP1[g] = newStCap.captureP1[g] + tran.getMin();
@@ -105,20 +110,23 @@ public class AutomatonUtil{
                     case TRANSITION_REALEPSILON:
                         break;
                     case TRANSITION_CAPTURE_OPEN:
-                        newStCap.captureP1 = stCap.captureP1.clone();
                         newStCap.captureP1[tran.getGroup()] = "";
                         break;
                     case TRANSITION_CAPTURE_CLOSE:
-                        newStCap.captureP1 = stCap.captureP1.clone();
-                        newStCap.captureP2 = stCap.captureP2.clone();
-                        newStCap.captureP2[tran.getGroup()] = newStCap.captureP1[tran.getGroup()];
-                        newStCap.captureP1[tran.getGroup()] = null;
+                        int group = tran.getGroup();
+                        // FIXME
+                        // Attack automatons foten have incomplete capture 
+                        // groups (close without opening). 
+                        // We currently ignore such close transitions.
+                        if (newStCap.captureP1[group] == null)
+                            break;
+                        newStCap.captureP2[group] = newStCap.captureP1[group];
+                        newStCap.captureP1[group] = null;
                         break;
                     case TRANSITION_BACKREF:
                         String cap = stCap.captureP2[tran.getGroup()];
                         if (cap == null)
                             continue;
-                        newStCap.captureP1 = stCap.captureP1.clone();
                         for (int g = 0; g < newStCap.captureP1.length; ++g)
                             if (newStCap.captureP1[g] != null)
                                 newStCap.captureP1[g] += cap;
@@ -127,19 +135,39 @@ public class AutomatonUtil{
                         break;
                 }
                 worklist.addLast(newStCap);
-                // FIXME
-                // System.out.println(tran);
-                // System.out.println(newStCap.captureP1[0]);
             }
         }
-        // FIXME
-        // System.out.println(auto.toDot());
-        // System.out.println(auto.toDot());
-		// throw new UnsupportedOperationException("wtf?");
-        return acceptEps ? "" : null;
+        return resultWithEps != null ? resultWithEps : new String[captureP2.length];
+    }
+
+    public static String[] getAutomatonCaptureStringLocalMin(
+        Automaton auto,
+        boolean tryAvoidEps
+    ) {
+        int maxGroup = auto.getMaxGroup();
+        return getAutomatonCaptureStringLocalMin(auto, tryAvoidEps, new String[maxGroup + 1]);
+    }
+
+    public static String[] getAutomatonCaptureStringLocalMin(Automaton auto) {
+        return getAutomatonCaptureStringLocalMin(auto, false);
+    }
+
+    public static String getAutomatonStringLocalMin(
+        Automaton auto,
+        boolean tryAvoidEps,
+        String[] captureP2
+    ) {
+        return getAutomatonCaptureStringLocalMin(auto, tryAvoidEps, captureP2)[0];
+    }
+
+    public static String getAutomatonStringLocalMin(
+        Automaton auto,
+        boolean tryAvoidEps
+    ) {
+        return getAutomatonCaptureStringLocalMin(auto, tryAvoidEps)[0];
     }
 
     public static String getAutomatonStringLocalMin(Automaton auto) {
-		return getAutomatonStringLocalMin(auto, false);
+		return getAutomatonCaptureStringLocalMin(auto)[0];
 	}
 }

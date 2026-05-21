@@ -3,10 +3,10 @@ package dk.brics.automaton;
 import java.lang.reflect.UndeclaredThrowableException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -20,19 +20,30 @@ import java.util.concurrent.TimeoutException;
 
 public class SuperlinearDetector {
 
-	/** Policy: find at most one vulnability */
+	/** Policy: find at most one vulnerability */
 	public static final int POLICY_ONE = 1 << 0;
 	/** 
-	 * Policy: when UnsupportedOperationException happens, store the exception 
-	 * and continue finding other vulnabilities (instead of returning) 
+	 * Policy: when {@link UnsupportedOperationException happens, store the 
+	 * exception and continue finding other vulnabilities (instead of returning) 
 	 */
 	public static final int POLICY_ERROR_DELAY = 1 << 1;
 	/**
-	 * Policy, if there are UnsupportedOperationException happens during
-	 * finding and no vulnability is successfully found, throw the error.
+	 * Policy: if there is {@link UnsupportedOperationException} happens during
+	 * detection and no vulnerability is successfully found, throw the error.
 	 * Only make effect when {@link #POLICY_ERROR_DELAY} is used.
 	 */
-	public static final int POLICY_ERROR_EMPTY = 1 << 2; 
+	public static final int POLICY_ERROR_EMPTY = 1 << 2;
+	/**
+	 * Policy: if an {@link InterruptedException} happens during detection, 
+	 * instead of throwing it, the function will stop detection and go to the 
+	 * return stage, and the {@link Thread#interrupted()} flag will be 
+	 * {@code true} after the function exiting. Note that it an
+	 * {@UnsupportedOperationException} may still be thrown during the return 
+	 * stage when {@link #POLICY_ERROR_EMPTY} is used. If no exception is 
+	 * thrown, the function will return all vulnerabilities it detected before
+	 * the interruption.
+	 */
+	public static final int POLICY_INTERRUPT_RETURN = 1 << 3;
 
 	private static class CaptureBackrefs {
 		State beforeOpen;
@@ -59,74 +70,85 @@ public class SuperlinearDetector {
 	} 
 
 	public static ArrayList<AttackAutomaton> detectBackrefToOverlapLoop(Automaton auto, int policy)
-	throws UnsupportedOperationException {
+	throws UnsupportedOperationException, InterruptedException {
 		ArrayList<AttackAutomaton> result = new ArrayList<AttackAutomaton>();
 		UnsupportedOperationException error = null;
-		CaptureBackrefs[] capBkrefs = captureBackrefInfo(auto);
-		for (int group = 1, maxGroup = capBkrefs.length - 1; group <= maxGroup; ++group) {
-			CaptureBackrefs cb = capBkrefs[group];
-			if (cb == null || cb.beforeOpen == null || cb.beforeClose == null || cb.beforeBackrefs.isEmpty())
-				continue;
-			Automaton prefixAuto = pathsFromTo(auto.getInitialState(), cb.beforeOpen, group);
-			ArrayList<State> statesInGroup = statesReachable(cb.afterOpen, group);
-			ArrayList<Automaton> lRLoopAutos = new ArrayList<Automaton>();
-			for (State loopState : statesInGroup) {
-				try {
-					Automaton loopAuto = pathsLoop(loopState, group);
-					if (loopAuto.isEmpty() || loopAuto.isEmptyString())
-						continue;
-					Automaton leftAuto = pathsFromTo(cb.afterOpen, loopState,  group);
-					Automaton lLoopAuto = leftAuto.repeat(1).intersection(loopAuto);
-					lLoopAuto.minimize();
-					if (lLoopAuto.isEmpty())
-						continue;
-					Automaton rightAuto = pathsFromTo(loopState, cb.beforeClose, group);
-					Automaton lRLoopAuto = rightAuto.repeat(1).intersection(lLoopAuto);
-					lRLoopAuto.minimize();
-					if (lRLoopAuto.isEmpty())
-						continue;
-					lRLoopAutos.add(lRLoopAuto);
-				} catch (UnsupportedOperationException err) {
-					if ((policy & POLICY_ERROR_DELAY) != 0) {
-						error = err;
-						continue;
-					} else
-						throw err;
+		try {
+			CaptureBackrefs[] capBkrefs = captureBackrefInfo(auto);
+			for (int group = 1, maxGroup = capBkrefs.length - 1; group <= maxGroup; ++group) {
+				pollInterrupt();
+				CaptureBackrefs cb = capBkrefs[group];
+				if (cb == null || cb.beforeOpen == null || cb.beforeClose == null || cb.beforeBackrefs.isEmpty())
+					continue;
+				Automaton prefixAuto = pathsFromTo(auto.getInitialState(), cb.beforeOpen, group);
+				ArrayList<State> statesInGroup = statesReachable(cb.afterOpen, group);
+				ArrayList<Automaton> lRLoopAutos = new ArrayList<Automaton>();
+				for (State loopState : statesInGroup) {
+					pollInterrupt();
+					try {
+						Automaton loopAuto = pathsLoop(loopState, group);
+						if (isEmptyIt(loopAuto) || isEmptyStringIt(loopAuto))
+							continue;
+						Automaton leftAuto = pathsFromTo(cb.afterOpen, loopState,  group);
+						Automaton lLoopAuto = intersectionIt(leftAuto.repeat(1), loopAuto);
+						minimizeIt(lLoopAuto);
+						if (isEmptyIt(lLoopAuto))
+							continue;
+						Automaton rightAuto = pathsFromTo(loopState, cb.beforeClose, group);
+						Automaton lRLoopAuto = intersectionIt(rightAuto.repeat(1), lLoopAuto);
+						minimizeIt(lRLoopAuto);
+						if (isEmptyIt(lRLoopAuto))
+							continue;
+						lRLoopAutos.add(lRLoopAuto);
+					} catch (UnsupportedOperationException err) {
+						if ((policy & POLICY_ERROR_DELAY) != 0) {
+							error = err;
+							continue;
+						} else
+							throw err;
+					}
+				}
+				if (lRLoopAutos.isEmpty())
+					continue;
+				Automaton leftRightLoopAuto = unionIt(lRLoopAutos);
+				minimizeIt(leftRightLoopAuto);
+				for (int b = 0, nbackref = cb.beforeBackrefs.size(); b < nbackref; ++b) {
+					pollInterrupt();
+					State beforeBackref = cb.beforeBackrefs.get(b);
+					State afterBackref = cb.afterBackrefs.get(b);
+					try{
+						Automaton bridgeAuto = pathsFromTo(cb.afterClose, beforeBackref, group);
+						Automaton pumpAuto = intersectionIt(bridgeAuto.repeat(1), leftRightLoopAuto);
+						minimizeIt(pumpAuto);
+						if (isEmptyIt(pumpAuto))
+							continue;
+						if (isEmptyStringIt(pumpAuto))
+							pumpAuto = leftRightLoopAuto;
+						Automaton suffixAuto = pathsToAccept(afterBackref);
+						result.add(new AttackAutomaton(1, prefixAuto, pumpAuto, suffixAuto, null));
+						if ((policy & POLICY_ONE) != 0)
+							return result;
+					} catch (UnsupportedOperationException err) {
+						if ((policy & POLICY_ERROR_DELAY) != 0)
+							error = err;
+						else
+							throw err;
+					}
 				}
 			}
-			if (lRLoopAutos.isEmpty())
-				continue;
-			Automaton leftRightLoopAuto = Automaton.union(lRLoopAutos);
-			leftRightLoopAuto.minimize();
-			for (int b = 0, nbackref = cb.beforeBackrefs.size(); b < nbackref; ++b) {
-				State beforeBackref = cb.beforeBackrefs.get(b);
-				State afterBackref = cb.afterBackrefs.get(b);
-				try{
-					Automaton bridgeAuto = pathsFromTo(cb.afterClose, beforeBackref, group);
-					Automaton pumpAuto = bridgeAuto.repeat(1).intersection(leftRightLoopAuto);
-					pumpAuto.minimize();
-					if (pumpAuto.isEmpty())
-						continue;
-					if (pumpAuto.isEmptyString())
-						pumpAuto = leftRightLoopAuto;
-					Automaton suffixAuto = pathsToAccept(cb.afterBackrefs.get(b));
-					result.add(new AttackAutomaton(prefixAuto, pumpAuto, suffixAuto, null));
-					if ((policy & POLICY_ONE) != 0)
-						return result;
-				} catch (UnsupportedOperationException err) {
-					if ((policy & POLICY_ERROR_DELAY) != 0)
-						error = err;
-					else
-						throw err;
-				}
-			}
+		} catch (InterruptedException err) {
+			if ((policy & POLICY_INTERRUPT_RETURN) != 0)
+				Thread.currentThread().interrupt();
+			else
+				throw err;
 		}
 		if ((policy & POLICY_ERROR_EMPTY) != 0 && error != null && result.isEmpty())
 			throw new UnsupportedOperationException("unsupport detecting this automaton", error);
 		return result;
 	}
 
-	public static AttackAutomaton detectOneBackrefToOverlapLoop(Automaton auto) {
+	public static AttackAutomaton detectOneBackrefToOverlapLoop(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
 		ArrayList<AttackAutomaton> l = detectBackrefToOverlapLoop(
 			auto, 
 			POLICY_ONE | POLICY_ERROR_DELAY | POLICY_ERROR_EMPTY
@@ -134,130 +156,143 @@ public class SuperlinearDetector {
 		return l.isEmpty() ? null : l.get(0);
 	}
 
-	public static AttackAutomaton detectOneBackrefToOverlapLoopWithTimeout(Automaton auto, long timeoutNs) 
-	throws TimeoutException, InterruptedException, UnsupportedOperationException {
-		return detectWithTimeout(new Callable<AttackAutomaton>() {
-			@Override
-			public AttackAutomaton call() {
-				return detectOneBackrefToOverlapLoop(auto);
-			}
-		}, timeoutNs);
+	public static ArrayList<AttackAutomaton> detectAsManyOneBackrefToOverlapLoop(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
+		return detectBackrefToOverlapLoop(
+			auto,
+			POLICY_ERROR_DELAY | POLICY_INTERRUPT_RETURN
+		);
 	}
 
-
-	public static ArrayList<AttackAutomaton> detectOverlapLoopBeforeBackrefToLoop(Automaton auto, int policy) {
+	public static ArrayList<AttackAutomaton> detectOverlapLoopBeforeBackrefToLoop(Automaton auto, int policy) 
+	throws UnsupportedOperationException, InterruptedException {
 		ArrayList<AttackAutomaton> result = new ArrayList<AttackAutomaton>();
 		UnsupportedOperationException error = null;
-		CaptureBackrefs[] capBkrefs = captureBackrefInfo(auto);
-		for (int group = 1, maxGroup = capBkrefs.length - 1; group <= maxGroup; ++group) {
-			CaptureBackrefs cb = capBkrefs[group];
-			if (cb == null || cb.beforeClose == null || cb.beforeBackrefs.isEmpty())
-				continue;
-			Automaton prefixAuto = pathsFromTo(auto.getInitialState(), cb.beforeOpen);
-			ArrayList<State> statesInGroup = statesReachable(cb.afterOpen, group);
-			ArrayList<Automaton> leftLoopAutos = new ArrayList<Automaton>();
-			ArrayList<Automaton> loopAutos = new ArrayList<Automaton>();
-			ArrayList<Automaton> rightAutos = new ArrayList<Automaton>();
-			for (State loopState : statesInGroup) {
-				try {
-					Automaton loopAuto = pathsLoop(loopState, group);
-					if (loopAuto.isEmpty() || loopAuto.isEmptyString())
-						continue;
-					Automaton leftAuto = pathsFromTo(cb.afterOpen, loopState, group);
-					Automaton leftLoopAuto = leftAuto.repeat(1).intersection(loopAuto);
-					leftLoopAuto.minimize();
-					if (leftLoopAuto.isEmpty())
-						continue;
-					Automaton rightAuto = pathsFromTo(loopState, cb.beforeClose, group);
-					leftLoopAutos.add(leftLoopAuto);
-					loopAutos.add(loopAuto);
-					rightAutos.add(rightAuto);
-				} catch (UnsupportedOperationException err) {
-					if ((policy & POLICY_ERROR_DELAY) != 0)
-						error = err;
-					else
-						throw err;
-				}
-			}
-
-			ArrayList<State> statesAfterClose = statesReachable(cb.afterClose, group);
-			ArrayList<Automaton> gapAutos = new ArrayList<Automaton>();
-			ArrayList<State> cycleStates = new ArrayList<State>();
-			ArrayList<Automaton> cycleAutos = new ArrayList<Automaton>();
-			for (State cycleState : statesAfterClose) {
-				try {
-					Automaton cycleAuto = pathsLoop(cycleState, group);
-					if (cycleAuto.isEmpty() || cycleAuto.isEmptyString())
-						continue;
-					Automaton gapAuto = pathsFromTo(cb.afterClose, cycleState, group);
-					gapAutos.add(gapAuto);
-					cycleStates.add(cycleState);
-					cycleAutos.add(cycleAuto);
-				} catch (UnsupportedOperationException err) {
-					if ((policy & POLICY_ERROR_DELAY) != 0)
-						error = err;
-					else
-						throw err;
-				}
-			}
-
-			for (int l = 0, nLoops = loopAutos.size(); l < nLoops; ++l) {
-				Automaton leftLoopAuto = leftLoopAutos.get(l);
-				Automaton loopAuto = loopAutos.get(l);
-				Automaton rightAuto = rightAutos.get(l);
-				for (int c = 0, nCycles = cycleAutos.size(); c < nCycles; ++c) {
-					Automaton gapAuto = gapAutos.get(c);
-					State cycleState = cycleStates.get(c);
-					Automaton cycleAuto = cycleAutos.get(c);
-					Automaton leftLoopCycleAuto = null, fenceAuto = null;
+		try {
+			CaptureBackrefs[] capBkrefs = captureBackrefInfo(auto);
+			for (int group = 1, maxGroup = capBkrefs.length - 1; group <= maxGroup; ++group) {
+				pollInterrupt();
+				CaptureBackrefs cb = capBkrefs[group];
+				if (cb == null || cb.beforeClose == null || cb.beforeBackrefs.isEmpty())
+					continue;
+				Automaton prefixAuto = pathsFromTo(auto.getInitialState(), cb.beforeOpen);
+				ArrayList<State> statesInGroup = statesReachable(cb.afterOpen, group);
+				ArrayList<Automaton> leftLoopAutos = new ArrayList<Automaton>();
+				ArrayList<Automaton> loopAutos = new ArrayList<Automaton>();
+				ArrayList<Automaton> rightAutos = new ArrayList<Automaton>();
+				for (State loopState : statesInGroup) {
+					pollInterrupt();
 					try {
-						leftLoopCycleAuto = leftLoopAuto.intersection(cycleAuto);
-						leftLoopCycleAuto.minimize();
-						if (leftLoopCycleAuto.isEmptyString())
+						Automaton loopAuto = pathsLoop(loopState, group);
+						if (isEmptyIt(loopAuto) || isEmptyStringIt(loopAuto))
 							continue;
-						fenceAuto = rightAuto.concatenate(gapAuto);
-						Automaton disAuto = fenceAuto.repeat(1).intersection(loopAuto.intersection(cycleAuto));
-						if (!disAuto.isEmpty())
+						Automaton leftAuto = pathsFromTo(cb.afterOpen, loopState, group);
+						Automaton leftLoopAuto = intersectionIt(leftAuto.repeat(1), loopAuto);
+						minimizeIt(leftLoopAuto);
+						if (isEmptyIt(leftLoopAuto))
 							continue;
+						Automaton rightAuto = pathsFromTo(loopState, cb.beforeClose, group);
+						leftLoopAutos.add(leftLoopAuto);
+						loopAutos.add(loopAuto);
+						rightAutos.add(rightAuto);
 					} catch (UnsupportedOperationException err) {
-						if ((policy & POLICY_ERROR_DELAY) != 0) {
+						if ((policy & POLICY_ERROR_DELAY) != 0)
 							error = err;
-							continue;
-						} else
+						else
 							throw err;
 					}
+				}
 
-					for(int b = 0, nBackref = cb.beforeBackrefs.size(); b < nBackref; ++b) {
-						State beforeBackref = cb.beforeBackrefs.get(b);
-						State afterBackref = cb.afterBackrefs.get(b);
+				ArrayList<State> statesAfterClose = statesReachable(cb.afterClose, group);
+				ArrayList<Automaton> gapAutos = new ArrayList<Automaton>();
+				ArrayList<State> cycleStates = new ArrayList<State>();
+				ArrayList<Automaton> cycleAutos = new ArrayList<Automaton>();
+				for (State cycleState : statesAfterClose) {
+					pollInterrupt();
+					try {
+						Automaton cycleAuto = pathsLoop(cycleState, group);
+						if (isEmptyIt(cycleAuto) || isEmptyStringIt(cycleAuto))
+							continue;
+						Automaton gapAuto = pathsFromTo(cb.afterClose, cycleState, group);
+						gapAutos.add(gapAuto);
+						cycleStates.add(cycleState);
+						cycleAutos.add(cycleAuto);
+					} catch (UnsupportedOperationException err) {
+						if ((policy & POLICY_ERROR_DELAY) != 0)
+							error = err;
+						else
+							throw err;
+					}
+				}
+
+				for (int l = 0, nLoops = loopAutos.size(); l < nLoops; ++l) {
+					pollInterrupt();
+					Automaton leftLoopAuto = leftLoopAutos.get(l);
+					Automaton loopAuto = loopAutos.get(l);
+					Automaton rightAuto = rightAutos.get(l);
+					for (int c = 0, nCycles = cycleAutos.size(); c < nCycles; ++c) {
+						pollInterrupt();
+						Automaton gapAuto = gapAutos.get(c);
+						State cycleState = cycleStates.get(c);
+						Automaton cycleAuto = cycleAutos.get(c);
+						Automaton leftLoopCycleAuto = null, fenceAuto = null;
 						try {
-							Automaton bridgeAuto = pathsFromTo(cycleState, beforeBackref, group);
-							if (bridgeAuto.isEmpty())
+							leftLoopCycleAuto = intersectionIt(leftLoopAuto, cycleAuto);
+							minimizeIt(leftLoopCycleAuto);
+							if (isEmptyStringIt(leftLoopCycleAuto))
 								continue;
-							Automaton pumpAuto = bridgeAuto.repeat(1).intersection(leftLoopCycleAuto);
-							pumpAuto.minimize();
-							if (pumpAuto.isEmpty())
-								continue;
-							Automaton suffixAuto = pathsToAccept(afterBackref);
-							result.add(new AttackAutomaton(prefixAuto, pumpAuto, suffixAuto, fenceAuto));
-							if ((policy & POLICY_ONE) != 0)
-								return result;
+							fenceAuto = rightAuto.concatenate(gapAuto);
+							// FIXME
+							// Automaton disAuto = intersectionIt(fenceAuto.repeat(1), loopAuto, cycleAuto);
+							// if (!isEmptyIt(disAuto))
+							// 	continue;
 						} catch (UnsupportedOperationException err) {
-							if ((policy & POLICY_ERROR_DELAY) != 0)
+							if ((policy & POLICY_ERROR_DELAY) != 0) {
 								error = err;
-							else
+								continue;
+							} else
 								throw err;
+						}
+
+						for(int b = 0, nBackref = cb.beforeBackrefs.size(); b < nBackref; ++b) {
+							pollInterrupt();
+							State beforeBackref = cb.beforeBackrefs.get(b);
+							State afterBackref = cb.afterBackrefs.get(b);
+							try {
+								Automaton bridgeAuto = pathsFromTo(cycleState, beforeBackref, group);
+								if (isEmptyIt(bridgeAuto))
+									continue;
+								Automaton pumpAuto = intersectionIt(bridgeAuto.repeat(1), leftLoopCycleAuto);
+								minimizeIt(pumpAuto);
+								if (isEmptyIt(pumpAuto))
+									continue;
+								Automaton suffixAuto = pathsToAccept(afterBackref);
+								result.add(new AttackAutomaton(2, prefixAuto, pumpAuto, suffixAuto, fenceAuto));
+								if ((policy & POLICY_ONE) != 0)
+									return result;
+							} catch (UnsupportedOperationException err) {
+								if ((policy & POLICY_ERROR_DELAY) != 0)
+									error = err;
+								else
+									throw err;
+							}
 						}
 					}
 				}
 			}
+		} catch (InterruptedException err) {
+			if ((policy & POLICY_INTERRUPT_RETURN) != 0)
+				Thread.currentThread().interrupt();
+			else
+				throw err;
 		}
 		if (error != null && (policy & POLICY_ERROR_EMPTY) != 0 && result.isEmpty())
 			throw new UnsupportedOperationException("unsupport detecting this automaton", error);
 		return result;
 	}
 
-	public static AttackAutomaton detectOneOverlapLoopBeforeBackrefToLoop(Automaton auto) {
+	public static AttackAutomaton detectOneOverlapLoopBeforeBackrefToLoop(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
 		ArrayList<AttackAutomaton> l = detectOverlapLoopBeforeBackrefToLoop(
 			auto,
 			POLICY_ONE | POLICY_ERROR_DELAY | POLICY_ERROR_EMPTY
@@ -265,128 +300,134 @@ public class SuperlinearDetector {
 		return l.isEmpty() ? null : l.get(0);
 	}
 
-	public static AttackAutomaton detectOneOverlapLoopBeforeBackrefToLoopWithTimeout(Automaton auto, long timeoutNs) 
-	throws TimeoutException, InterruptedException, UnsupportedOperationException {
-		return detectWithTimeout(new Callable<AttackAutomaton>() {
-			@Override
-			public AttackAutomaton call() {
-				return detectOneOverlapLoopBeforeBackrefToLoop(auto);
-			}
-		}, timeoutNs);
+	public static ArrayList<AttackAutomaton> detectAsManyOverlapLoopBeforeBackrefToLoop(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
+		return detectOverlapLoopBeforeBackrefToLoop(
+			auto,
+			POLICY_ERROR_DELAY | POLICY_INTERRUPT_RETURN
+		);
 	}
 
-	public static ArrayList<AttackAutomaton> detectBackrefToLoopAndOverlapLoop(Automaton auto, int policy) {
+	public static ArrayList<AttackAutomaton> detectBackrefToLoopAndOverlapLoop(Automaton auto, int policy)
+	throws UnsupportedOperationException, InterruptedException {
 		ArrayList<AttackAutomaton> result = new ArrayList<AttackAutomaton>();
 		UnsupportedOperationException error = null;
-		CaptureBackrefs[] capBkrefs = captureBackrefInfo(auto);
-		for (int group = 1, maxGroup = capBkrefs.length - 1; group <= maxGroup; ++group) {
-			CaptureBackrefs cb = capBkrefs[group];
-			if (cb == null || cb.beforeClose == null || cb.beforeBackrefs.isEmpty())
-				continue;
-			Automaton prefixAuto = pathsFromTo(auto.getInitialState(), cb.beforeOpen);
-			ArrayList<State> statesInGroup = statesReachable(cb.afterOpen, group);
-			ArrayList<State> loopStates = new ArrayList<State>();
-			ArrayList<Automaton> loopAutos = new ArrayList<Automaton>();
-			ArrayList<Automaton> leftLoopAutos = new ArrayList<Automaton>();
-			ArrayList<State> cycleStates = new ArrayList<State>();
-			ArrayList<Automaton> cycleAutos = new ArrayList<Automaton>();
-			ArrayList<Automaton> cycleRightAutos = new ArrayList<Automaton>();
-			for (State loopState : statesInGroup) {
-				try{
-					Automaton loopAuto = pathsLoop(loopState, group);
-					if (loopAuto.isEmpty() || loopAuto.isEmptyString())
-						continue;
-					Automaton leftAuto = pathsFromTo(cb.afterOpen, loopState, group);
-					Automaton leftLoopAuto = leftAuto.repeat(1).intersection(loopAuto);
-					leftLoopAuto.minimize();
-					if (!leftLoopAuto.isEmpty()) {
-						loopStates.add(loopState);
-						loopAutos.add(loopAuto);
-						leftLoopAutos.add(leftLoopAuto);	
-					}
-					Automaton rightAuto = pathsFromTo(loopState, cb.beforeClose, group);
-					Automaton cycleRightAuto = rightAuto.repeat(1).intersection(loopAuto);
-					cycleRightAuto.minimize();
-					if (!cycleRightAuto.isEmpty()) {
-						cycleStates.add(loopState);
-						cycleAutos.add(loopAuto);
-						cycleRightAutos.add(cycleRightAuto);
-					}
-				} catch (UnsupportedOperationException err) {
-					if ((policy & POLICY_ERROR_DELAY) != 0)
-						error = err;
-					else
-						throw err;
-				}
-			}
-			for (int l = 0, nLoops = loopAutos.size(); l < nLoops; ++l) {
-				State loopState = loopStates.get(l);
-				Automaton loopAuto = loopAutos.get(l);
-				Automaton leftLoopAuto = leftLoopAutos.get(l);
-
-				for (int c = 0, nCycles = cycleAutos.size(); c < nCycles; ++c) {
-					State cycleState = cycleStates.get(c);
-					if (loopState == cycleState)
-						continue;
-					Automaton cycleAuto = cycleAutos.get(c);
-					Automaton cycleRightAuto = cycleRightAutos.get(c);
-
-					Automaton fenceAuto = null, leftLoopCycleRightAuto = null;
-					try {
-						fenceAuto = pathsFromTo(loopState, cycleState, group);
-						if (fenceAuto.isEmpty())
+		try{
+			CaptureBackrefs[] capBkrefs = captureBackrefInfo(auto);
+			for (int group = 1, maxGroup = capBkrefs.length - 1; group <= maxGroup; ++group) {
+				pollInterrupt();
+				CaptureBackrefs cb = capBkrefs[group];
+				if (cb == null || cb.beforeClose == null || cb.beforeBackrefs.isEmpty())
+					continue;
+				Automaton prefixAuto = pathsFromTo(auto.getInitialState(), cb.beforeOpen);
+				ArrayList<State> statesInGroup = statesReachable(cb.afterOpen, group);
+				ArrayList<State> loopStates = new ArrayList<State>();
+				ArrayList<Automaton> loopAutos = new ArrayList<Automaton>();
+				ArrayList<Automaton> leftLoopAutos = new ArrayList<Automaton>();
+				ArrayList<State> cycleStates = new ArrayList<State>();
+				ArrayList<Automaton> cycleAutos = new ArrayList<Automaton>();
+				ArrayList<Automaton> cycleRightAutos = new ArrayList<Automaton>();
+				for (State loopState : statesInGroup) {
+					pollInterrupt();
+					try{
+						Automaton loopAuto = pathsLoop(loopState, group);
+						if (isEmptyIt(loopAuto) || isEmptyStringIt(loopAuto))
 							continue;
-						leftLoopCycleRightAuto = leftLoopAuto.intersection(cycleRightAuto);
-						leftLoopCycleRightAuto.minimize();
-						if (leftLoopCycleRightAuto.isEmptyString() || leftLoopCycleRightAuto.isEmpty())
-							continue;
-						Automaton disAuto = fenceAuto.repeat(1).intersection(loopAuto.intersection(cycleAuto));
-						if (!disAuto.isEmpty())
-							continue;
-						// FIXME
-						// System.out.println(loopAuto.toDot());
-						// System.out.println(cycleAuto.toDot());
-						// System.out.println(fenceAuto.toDot());
-						// System.out.println(auto.toDot());
-						// System.exit(0);
+						Automaton leftAuto = pathsFromTo(cb.afterOpen, loopState, group);
+						Automaton leftLoopAuto = intersectionIt(leftAuto.repeat(1), loopAuto);
+						minimizeIt(leftLoopAuto);
+						if (!isEmptyIt(leftLoopAuto)) {
+							loopStates.add(loopState);
+							loopAutos.add(loopAuto);
+							leftLoopAutos.add(leftLoopAuto);	
+						}
+						Automaton rightAuto = pathsFromTo(loopState, cb.beforeClose, group);
+						Automaton cycleRightAuto = intersectionIt(rightAuto.repeat(1), loopAuto);
+						minimizeIt(cycleRightAuto);
+						if (!isEmptyIt(cycleRightAuto)) {
+							cycleStates.add(loopState);
+							cycleAutos.add(loopAuto);
+							cycleRightAutos.add(cycleRightAuto);
+						}
 					} catch (UnsupportedOperationException err) {
-						if ((policy & POLICY_ERROR_DELAY) != 0) {
+						if ((policy & POLICY_ERROR_DELAY) != 0)
 							error = err;
-							continue;
-						} else
+						else
 							throw err;
 					}
-					for (int b = 0, nBackrefs = cb.beforeBackrefs.size(); b < nBackrefs; ++b) {
-						State beforeBackref = cb.beforeBackrefs.get(b);
-						State afterBackref = cb.afterBackrefs.get(b);
+				}
+				for (int l = 0, nLoops = loopAutos.size(); l < nLoops; ++l) {
+					pollInterrupt();
+					State loopState = loopStates.get(l);
+					Automaton loopAuto = loopAutos.get(l);
+					Automaton leftLoopAuto = leftLoopAutos.get(l);
+
+					for (int c = 0, nCycles = cycleAutos.size(); c < nCycles; ++c) {
+						pollInterrupt();
+						State cycleState = cycleStates.get(c);
+						if (loopState == cycleState)
+							continue;
+						Automaton cycleAuto = cycleAutos.get(c);
+						Automaton cycleRightAuto = cycleRightAutos.get(c);
+
+						Automaton fenceAuto = null, leftLoopCycleRightAuto = null;
 						try {
-							Automaton bridgeAuto = pathsFromTo(cb.afterClose, beforeBackref, group);
-							Automaton pumpAuto = bridgeAuto.repeat(1).intersection(leftLoopCycleRightAuto);
-							pumpAuto.minimize();
-							if (pumpAuto.isEmpty())
+							fenceAuto = pathsFromTo(loopState, cycleState, group);
+							if (isEmptyIt(fenceAuto))
 								continue;
-							if (pumpAuto.isEmptyString())
-								pumpAuto = leftLoopCycleRightAuto;
-							Automaton suffixAuto = pathsToAccept(afterBackref);
-							result.add(new AttackAutomaton(prefixAuto, pumpAuto, suffixAuto, fenceAuto));
-							if ((policy & POLICY_ONE) != 0)
-								return result;
+							leftLoopCycleRightAuto = intersectionIt(leftLoopAuto, cycleRightAuto);
+							minimizeIt(leftLoopCycleRightAuto);
+							if (isEmptyStringIt(leftLoopCycleRightAuto) || isEmptyIt(leftLoopCycleRightAuto))
+								continue;
+							Automaton disAuto = intersectionIt(fenceAuto.repeat(1), loopAuto, cycleAuto);
+							if (!isEmptyIt(disAuto))
+								continue;
 						} catch (UnsupportedOperationException err) {
-							if ((policy & POLICY_ERROR_DELAY) != 0)
+							if ((policy & POLICY_ERROR_DELAY) != 0) {
 								error = err;
-							else
+								continue;
+							} else
 								throw err;
+						}
+						for (int b = 0, nBackrefs = cb.beforeBackrefs.size(); b < nBackrefs; ++b) {
+							pollInterrupt();
+							State beforeBackref = cb.beforeBackrefs.get(b);
+							State afterBackref = cb.afterBackrefs.get(b);
+							try {
+								Automaton bridgeAuto = pathsFromTo(cb.afterClose, beforeBackref, group);
+								Automaton pumpAuto = intersectionIt(bridgeAuto.repeat(1), leftLoopCycleRightAuto);
+								minimizeIt(pumpAuto);
+								if (isEmptyIt(pumpAuto))
+									continue;
+								if (isEmptyStringIt(pumpAuto))
+									pumpAuto = leftLoopCycleRightAuto;
+								Automaton suffixAuto = pathsToAccept(afterBackref);
+								result.add(new AttackAutomaton(3, prefixAuto, pumpAuto, suffixAuto, fenceAuto));
+								if ((policy & POLICY_ONE) != 0)
+									return result;
+							} catch (UnsupportedOperationException err) {
+								if ((policy & POLICY_ERROR_DELAY) != 0)
+									error = err;
+								else
+									throw err;
+							}
 						}
 					}
 				}
 			}
+		} catch (InterruptedException err) {
+			if ((policy & POLICY_INTERRUPT_RETURN) != 0)
+				Thread.currentThread().interrupt();
+			else
+				throw err;
 		}
 		if (error != null && (policy & POLICY_ERROR_EMPTY) != 0 && result.isEmpty())
 			throw new UnsupportedOperationException("unsupport detecting this automaton", error);
 		return result;
 	}
 
-	public static AttackAutomaton detectOneBackrefToLoopAndOverlapLoop(Automaton auto) {
+	public static AttackAutomaton detectOneBackrefToLoopAndOverlapLoop(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
 		ArrayList<AttackAutomaton> l = detectBackrefToLoopAndOverlapLoop(
 			auto, 
 			POLICY_ONE | POLICY_ERROR_DELAY | POLICY_ERROR_EMPTY
@@ -394,14 +435,64 @@ public class SuperlinearDetector {
 		return l.isEmpty() ? null : l.get(0);
 	}
 
-	public static AttackAutomaton detectOneBackrefToLoopAndOverlapLoopWithTimeout(Automaton auto, long timeoutNs) 
-	throws TimeoutException, InterruptedException, UnsupportedOperationException {
-		return detectWithTimeout(new Callable<AttackAutomaton>() {
-			@Override
-			public AttackAutomaton call() {
-				return detectOneBackrefToLoopAndOverlapLoop(auto);
+	public static ArrayList<AttackAutomaton> detectAsMuchBackrefToLoopAndOverlapLoop(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
+		return detectBackrefToLoopAndOverlapLoop(
+			auto, 
+			POLICY_ERROR_DELAY | POLICY_INTERRUPT_RETURN
+		);
+	}
+
+	public static ArrayList<AttackAutomaton> detectSuperlinearBackref(Automaton auto, int policy)
+	throws UnsupportedOperationException, InterruptedException {
+		ArrayList<AttackAutomaton> result = null;
+		UnsupportedOperationException error = null;
+		for (int i = 1; i <= 3; ++i) {
+			try {
+				ArrayList<AttackAutomaton> res = 
+					i == 1 ? detectBackrefToOverlapLoop(auto, policy) :
+					i == 2 ? detectOverlapLoopBeforeBackrefToLoop(auto, policy) :
+					detectBackrefToLoopAndOverlapLoop(auto, policy);
+				if ((policy & POLICY_ONE) != 0 && !res.isEmpty())
+					return res;
+				if (result == null || result.isEmpty())
+					result = res;
+				else
+					result.addAll(res);
+				pollInterrupt();
+			} catch (UnsupportedOperationException err) {
+				if ((policy & POLICY_ERROR_DELAY) != 0)
+					error = err;
+				else
+					throw err;
+			} catch (InterruptedException err) {
+				if ((policy & POLICY_INTERRUPT_RETURN) != 0) {
+					Thread.currentThread().interrupt();
+					break;
+				} else
+					throw err;
 			}
-		}, timeoutNs);
+		}
+		if (error != null && (policy & POLICY_ERROR_EMPTY) != 0 && result.isEmpty())
+			throw new UnsupportedOperationException("unsupport detecting this automaton", error);
+		return result;
+	}
+
+	public static AttackAutomaton detectOneSuperlinearBackref(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
+		ArrayList<AttackAutomaton> l = detectSuperlinearBackref(
+			auto,
+			POLICY_ONE | POLICY_ERROR_DELAY | POLICY_ERROR_EMPTY
+		);
+		return l.isEmpty() ? null : l.get(0);
+	}
+
+	public static ArrayList<AttackAutomaton> detectAsManySuperlinearBackref(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
+		return detectSuperlinearBackref(
+			auto,
+			POLICY_ERROR_DELAY | POLICY_INTERRUPT_RETURN
+		);
 	}
 
 	// public static ArrayList<AttackAutomaton> detectIDA(Automaton auto, int policy) {
@@ -551,64 +642,25 @@ public class SuperlinearDetector {
 	// 	return result;
 	// }
 
-	public static ArrayList<AttackAutomaton> detectPDA(Automaton auto, int policy) throws InterruptedException {
+	public static ArrayList<AttackAutomaton> detectPDA(Automaton auto, int policy)
+	throws UnsupportedOperationException, InterruptedException {
 		ArrayList<AttackAutomaton> result = new ArrayList<AttackAutomaton>();
 		UnsupportedOperationException error = null;
-		ArrayList<State> states = statesReachable(auto.getInitialState());
-		ArrayList<State> loopInitStates = new ArrayList<State>();
-		ArrayList<Set<State>> loopStateSets = new ArrayList<Set<State>>();
-		ArrayList<Automaton> loopAutos = new ArrayList<Automaton>();
-		for (State state : states) {
-			// FIXME
-			if (Thread.currentThread().isInterrupted())
-				throw new InterruptedException();
-			try {
-				AutomatonStateMap loopAutoStateMap = pathsLoopAndStateMap(state);
-				// loopAuto.minimize();
-				if (!loopAutoStateMap.auto.isEmpty() && !loopAutoStateMap.auto.isEmptyString()) {
-					loopInitStates.add(state);
-					loopStateSets.add(loopAutoStateMap.stateMap.keySet());
-					loopAutos.add(loopAutoStateMap.auto);
-				}
-			} catch (UnsupportedOperationException err) {
-				if ((policy & POLICY_ERROR_DELAY) != 0)
-					error = err;
-				else
-					throw err;
-			}
-		}
-		int nLoops = loopInitStates.size();
-		for (int l1 = 0; l1 < nLoops; ++l1) {
-			State loop1InitState = loopInitStates.get(l1);
-			Set<State> loop1StateSet = loopStateSets.get(l1);
-			Automaton loop1Auto = loopAutos.get(l1);
-			Automaton prefixAuto = pathsFromTo(auto.getInitialState(), loop1InitState);
-			for (int l2 = 0; l2 < nLoops; ++l2) {
-				// FIXME
-				if (Thread.currentThread().isInterrupted())
-					throw new InterruptedException();
-				if (l1 == l2)
-					continue;
-				State loop2InitState = loopInitStates.get(l2);
-				Automaton loop2Auto = loopAutos.get(l2);
-				if (loop1StateSet.contains(loop2InitState))
-					continue;
+		try{
+			ArrayList<State> states = statesReachable(auto.getInitialState());
+			ArrayList<State> loopInitStates = new ArrayList<State>();
+			ArrayList<Set<State>> loopStateSets = new ArrayList<Set<State>>();
+			ArrayList<Automaton> loopAutos = new ArrayList<Automaton>();
+			for (State state : states) {
+				pollInterrupt();
 				try {
-					Automaton bridgeAuto = pathsFromTo(loop1InitState, loop2InitState);
-					if (bridgeAuto.isEmpty())
-						continue;
-					Automaton pumpAuto = loop1Auto.intersection(loop2Auto);
-					pumpAuto.minimize();
-					if (pumpAuto.isEmptyString())
-						continue;
-					pumpAuto = pumpAuto.intersection(bridgeAuto.repeat(1));
-					pumpAuto.minimize();
-					if (pumpAuto.isEmpty() || pumpAuto.isEmptyString())
-						continue;
-					Automaton suffixAuto = pathsToAccept(loop2InitState);
-					result.add(new AttackAutomaton(prefixAuto, pumpAuto, suffixAuto));
-					if ((policy & POLICY_ONE) != 0)
-						return result;
+					AutomatonStateMap loopAutoStateMap = pathsLoopAndStateMap(state);
+					// loopAuto.minimize();
+					if (!isEmptyIt(loopAutoStateMap.auto) && !isEmptyStringIt(loopAutoStateMap.auto)) {
+						loopInitStates.add(state);
+						loopStateSets.add(loopAutoStateMap.stateMap.keySet());
+						loopAutos.add(loopAutoStateMap.auto);
+					}
 				} catch (UnsupportedOperationException err) {
 					if ((policy & POLICY_ERROR_DELAY) != 0)
 						error = err;
@@ -616,90 +668,35 @@ public class SuperlinearDetector {
 						throw err;
 				}
 			}
-		}
-		if (error != null && (policy & POLICY_ERROR_EMPTY) != 0 && result.isEmpty())
-			throw new UnsupportedOperationException("unsupport detecting this automaton", error);
-		return result;
-	}
-
-
-	public static AttackAutomaton detectOnePDA(Automaton auto) throws InterruptedException {
-		ArrayList<AttackAutomaton> l = detectPDA(
-			auto,
-			POLICY_ONE | POLICY_ERROR_DELAY | POLICY_ERROR_EMPTY
-		);
-		return l.isEmpty() ? null : l.get(0);
-	}
-
-	public static ArrayList<AttackAutomaton> detectEDA(Automaton auto, int policy) throws InterruptedException {
-		ArrayList<AttackAutomaton> result = new ArrayList<AttackAutomaton>();
-		UnsupportedOperationException error = null;
-		for (State state : auto.getStates()) {
-			// FIXME
-			if (Thread.currentThread().isInterrupted())
-				throw new InterruptedException();
-			// quick path
-			if (state.getTransitions().size() < 2)
-				continue;
-			Automaton loopAuto = pathsLoop(state);
-			try {
-				if (loopAuto.isEmpty() || loopAuto.isEmptyString())
-					continue;
-			} catch (UnsupportedOperationException err) {
-				if ((policy & POLICY_ERROR_DELAY) != 0) {
-					error = err;
-					continue;
-				} else
-					throw err;
-			}
-			State loopInitState = loopAuto.getInitialState();
-			int nTrans = loopInitState.getTransitions().size();
-			if (nTrans < 2)
-				continue;
-			Transition[] trans = loopInitState.getTransitions().toArray(new Transition[nTrans]);
-			Automaton prefixAuto = pathsFromTo(auto.getInitialState(), state);
-			Automaton suffixAuto = pathsToAccept(state);
-			HashMap<State, Automaton> partSubLoopAutos = new HashMap<State, Automaton>();
-			for (int i1 = 0; i1 < trans.length; ++i1) {
-				Transition tran1 = trans[i1];
-				State to1 = tran1.getDest();
-				for (int i2 = i1 + 1; i2 < trans.length; ++i2) {
-					// FIXME
-					if (Thread.currentThread().isInterrupted())
-						throw new InterruptedException();
-					Transition tran2 = trans[i2];
-					State to2 = tran2.getDest();
-					// check if overlap
-					if (tran1.getKind() == Transition.Kind.TRANSITION_CHAR
-					&& tran2.getKind() == Transition.Kind.TRANSITION_CHAR
-					&& (tran1.getMax() < tran2.getMin() || tran2.getMax() < tran1.getMin()))
+			int nLoops = loopInitStates.size();
+			for (int l1 = 0; l1 < nLoops; ++l1) {
+				pollInterrupt();
+				State loop1InitState = loopInitStates.get(l1);
+				Set<State> loop1StateSet = loopStateSets.get(l1);
+				Automaton loop1Auto = loopAutos.get(l1);
+				Automaton prefixAuto = pathsFromTo(auto.getInitialState(), loop1InitState);
+				for (int l2 = 0; l2 < nLoops; ++l2) {
+					pollInterrupt();
+					if (l1 == l2)
 						continue;
-					// quick path
-					if (to1 == to2) {
-						result.add(new AttackAutomaton(prefixAuto, loopAuto, suffixAuto));
-						if ((policy & POLICY_ONE) != 0)
-							return result;
+					State loop2InitState = loopInitStates.get(l2);
+					Automaton loop2Auto = loopAutos.get(l2);
+					if (loop1StateSet.contains(loop2InitState))
 						continue;
-					}
-					Automaton partSubLoopAuto1 = partSubLoopAutos.get(to1);
-					if (partSubLoopAuto1 == null) {
-						partSubLoopAuto1 = pathsFromTo(to1, loopInitState);
-						partSubLoopAutos.put(to1, partSubLoopAuto1);
-					}
-					Automaton subLoopAuto1 = prependTransition(tran1, partSubLoopAuto1);
-					Automaton partSubLoopAuto2 = partSubLoopAutos.get(to2);
-					if (partSubLoopAuto2 == null) {
-						partSubLoopAuto2 = pathsFromTo(to2, loopInitState);
-						partSubLoopAutos.put(to2, partSubLoopAuto2);
-					}
-					Automaton subLoopAuto2 = prependTransition(tran2, partSubLoopAuto2);
 					try {
-						Automaton pumpAuto = subLoopAuto1.intersection(subLoopAuto2);
-						pumpAuto.minimize();
-						if (pumpAuto.isEmpty() || pumpAuto.isEmptyString())
+						Automaton bridgeAuto = pathsFromTo(loop1InitState, loop2InitState);
+						if (isEmptyIt(bridgeAuto))
 							continue;
-						
-						result.add(new AttackAutomaton(prefixAuto, pumpAuto, suffixAuto));
+						Automaton pumpAuto = intersectionIt(loop1Auto, loop2Auto);
+						minimizeIt(pumpAuto);
+						if (isEmptyStringIt(pumpAuto))
+							continue;
+						pumpAuto = intersectionIt(pumpAuto, bridgeAuto.repeat(1));
+						minimizeIt(pumpAuto);
+						if (isEmptyIt(pumpAuto) || isEmptyStringIt(pumpAuto))
+							continue;
+						Automaton suffixAuto = pathsToAccept(loop2InitState);
+						result.add(new AttackAutomaton(0, prefixAuto, pumpAuto, suffixAuto));
 						if ((policy & POLICY_ONE) != 0)
 							return result;
 					} catch (UnsupportedOperationException err) {
@@ -710,6 +707,118 @@ public class SuperlinearDetector {
 					}
 				}
 			}
+		} catch (InterruptedException err) {
+			if ((policy & POLICY_INTERRUPT_RETURN) != 0)
+				Thread.currentThread().interrupt();
+			else
+				throw err;
+		}
+		if (error != null && (policy & POLICY_ERROR_EMPTY) != 0 && result.isEmpty())
+			throw new UnsupportedOperationException("unsupport detecting this automaton", error);
+		return result;
+	}
+
+
+	public static AttackAutomaton detectOnePDA(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
+		ArrayList<AttackAutomaton> l = detectPDA(
+			auto,
+			POLICY_ONE | POLICY_ERROR_DELAY | POLICY_ERROR_EMPTY
+		);
+		return l.isEmpty() ? null : l.get(0);
+	}
+
+	public static ArrayList<AttackAutomaton> detectAsManyPDA(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
+		return detectPDA(
+			auto,
+			POLICY_ERROR_DELAY | POLICY_INTERRUPT_RETURN
+		);
+	}
+
+	public static ArrayList<AttackAutomaton> detectEDA(Automaton auto, int policy)
+	throws UnsupportedOperationException, InterruptedException {
+		ArrayList<AttackAutomaton> result = new ArrayList<AttackAutomaton>();
+		UnsupportedOperationException error = null;
+		try {
+			for (State state : auto.getStates()) {
+				pollInterrupt();
+				// quick path
+				if (state.getTransitions().size() < 2)
+					continue;
+				Automaton loopAuto = pathsLoop(state);
+				try {
+					if (isEmptyIt(loopAuto) || isEmptyStringIt(loopAuto))
+						continue;
+				} catch (UnsupportedOperationException err) {
+					if ((policy & POLICY_ERROR_DELAY) != 0) {
+						error = err;
+						continue;
+					} else
+						throw err;
+				}
+				State loopInitState = loopAuto.getInitialState();
+				int nTrans = loopInitState.getTransitions().size();
+				if (nTrans < 2)
+					continue;
+				Transition[] trans = loopInitState.getTransitions().toArray(new Transition[nTrans]);
+				Automaton prefixAuto = pathsFromTo(auto.getInitialState(), state);
+				Automaton suffixAuto = pathsToAccept(state);
+				HashMap<State, Automaton> partSubLoopAutos = new HashMap<State, Automaton>();
+				for (int i1 = 0; i1 < trans.length; ++i1) {
+					pollInterrupt();
+					Transition tran1 = trans[i1];
+					State to1 = tran1.getDest();
+					for (int i2 = i1 + 1; i2 < trans.length; ++i2) {
+						pollInterrupt();
+						Transition tran2 = trans[i2];
+						State to2 = tran2.getDest();
+						// check if overlap
+						if (tran1.getKind() == Transition.Kind.TRANSITION_CHAR
+						&& tran2.getKind() == Transition.Kind.TRANSITION_CHAR
+						&& (tran1.getMax() < tran2.getMin() || tran2.getMax() < tran1.getMin()))
+							continue;
+						// quick path
+						if (to1 == to2) {
+							result.add(new AttackAutomaton(0, prefixAuto, loopAuto, suffixAuto));
+							if ((policy & POLICY_ONE) != 0)
+								return result;
+							continue;
+						}
+						Automaton partSubLoopAuto1 = partSubLoopAutos.get(to1);
+						if (partSubLoopAuto1 == null) {
+							partSubLoopAuto1 = pathsFromTo(to1, loopInitState);
+							partSubLoopAutos.put(to1, partSubLoopAuto1);
+						}
+						Automaton subLoopAuto1 = prependTransition(tran1, partSubLoopAuto1);
+						Automaton partSubLoopAuto2 = partSubLoopAutos.get(to2);
+						if (partSubLoopAuto2 == null) {
+							partSubLoopAuto2 = pathsFromTo(to2, loopInitState);
+							partSubLoopAutos.put(to2, partSubLoopAuto2);
+						}
+						Automaton subLoopAuto2 = prependTransition(tran2, partSubLoopAuto2);
+						try {
+							Automaton pumpAuto = intersectionIt(subLoopAuto1, subLoopAuto2);
+							minimizeIt(pumpAuto);
+							if (isEmptyIt(pumpAuto) || isEmptyStringIt(pumpAuto))
+								continue;
+							result.add(new AttackAutomaton(0, prefixAuto, pumpAuto, suffixAuto));
+							if ((policy & POLICY_ONE) != 0)
+								return result;
+						} catch (UnsupportedOperationException err) {
+							if ((policy & POLICY_ERROR_DELAY) != 0)
+								error = err;
+							else
+								throw err;
+						}
+					}
+				}
+			}
+		} catch (InterruptedException err) {
+			if ((policy & POLICY_INTERRUPT_RETURN) != 0)
+				Thread.currentThread().interrupt();
+			else
+				throw err;
 		}
 		if (error != null && (policy & POLICY_ERROR_EMPTY) != 0 && result.isEmpty())
 			throw new UnsupportedOperationException("unsupport detecting this automaton", error);
@@ -734,40 +843,41 @@ public class SuperlinearDetector {
 		return res;
 	}
 
-	public static ArrayList<AttackAutomaton> detectIDA(Automaton auto, int policy) throws InterruptedException {
+	public static ArrayList<AttackAutomaton> detectIDA(Automaton auto, int policy)
+	throws UnsupportedOperationException, InterruptedException {
 		ArrayList<AttackAutomaton> result = null;
 		UnsupportedOperationException error = null;
-		try{
-			ArrayList<AttackAutomaton> pdaResult = detectPDA(auto, policy);
-			if ((policy & POLICY_ONE) != 0 && !pdaResult.isEmpty())
-				return pdaResult;
-			result = pdaResult;
-		} catch (UnsupportedOperationException err) {
-			if ((policy & POLICY_ERROR_DELAY) != 0)
-				error = err;
-			else
-				throw err;
-		}
-		try {
-			ArrayList<AttackAutomaton> edaResult = detectEDA(auto, policy);
-			if ((policy & POLICY_ONE) != 0 && !edaResult.isEmpty())
-				return edaResult;
-			if (result == null || result.isEmpty())
-				result = edaResult;
-			else
-				result.addAll(edaResult);
-		} catch (UnsupportedOperationException err) {
-			if ((policy & POLICY_ERROR_DELAY) != 0)
-				error = err;
-			else
-				throw err;
+		for (int i = 0; i <  2; ++i) {
+			try {
+				ArrayList<AttackAutomaton> res = 
+					i == 0 ? detectPDA(auto, policy) : detectEDA(auto, policy);
+				if ((policy & POLICY_ONE) != 0 && !res.isEmpty())
+					return res;
+				if (result == null || result.isEmpty())
+					result = res;
+				else
+					result.addAll(res);
+				pollInterrupt();
+			} catch (UnsupportedOperationException err) {
+				if ((policy & POLICY_ERROR_DELAY) != 0)
+					error = err;
+				else
+					throw err;
+			} catch (InterruptedException err) {
+				if ((policy & POLICY_INTERRUPT_RETURN) != 0){
+					Thread.currentThread().interrupt();
+					break;
+				} else
+					throw err;
+			}
 		}
 		if (error != null && (policy & POLICY_ERROR_EMPTY) != 0 && (result == null || result.isEmpty()))
 			throw new UnsupportedOperationException("unsupport detecting this automaton", error);
 		return result != null ? result : new ArrayList<AttackAutomaton>();
 	}
 
-	public static AttackAutomaton detectOneIDA(Automaton auto) throws InterruptedException {
+	public static AttackAutomaton detectOneIDA(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
 		ArrayList<AttackAutomaton> l = detectIDA(
 			auto,
 			POLICY_ONE | POLICY_ERROR_DELAY | POLICY_ERROR_EMPTY
@@ -775,14 +885,9 @@ public class SuperlinearDetector {
 		return l.isEmpty() ? null : l.get(0);
 	}
 
-	public static AttackAutomaton detectOneIDAWithTimeout(Automaton auto, long timeoutNs) 
-	throws TimeoutException, InterruptedException, UnsupportedOperationException {
-		return detectWithTimeout(new Callable<AttackAutomaton>() {
-			@Override
-			public AttackAutomaton call() throws InterruptedException {
-				return detectOneIDA(auto);
-			}
-		}, timeoutNs);
+	public static ArrayList<AttackAutomaton> detectAsManyIDA(Automaton auto)
+	throws UnsupportedOperationException, InterruptedException {
+		return detectIDA(auto, POLICY_ERROR_DELAY | POLICY_INTERRUPT_RETURN);
 	}
 
 	// private static Automaton getCapturePumpAuto(State afterOpen, State beforeClose, int group)
@@ -843,7 +948,8 @@ public class SuperlinearDetector {
 		}
 	}
 
-	private static CaptureBackrefs[] captureBackrefInfo(Automaton auto) {
+	private static CaptureBackrefs[] captureBackrefInfo(Automaton auto) 
+	throws InterruptedException {
 		int maxGroup = Math.max(auto.getMaxBackrefGroup(), auto.getMaxCaptureGroup());
 		CaptureBackrefs[] capBkrefs = new CaptureBackrefs[maxGroup + 1];
 		ArrayDeque<State> workList = new ArrayDeque<State>();
@@ -851,8 +957,10 @@ public class SuperlinearDetector {
 		workList.addLast(auto.initial);
 		visited.add(auto.initial);
 		while (!workList.isEmpty()) {
+			pollInterrupt();
 			State s = workList.removeLast();
 			for (Transition t : s.transitions) {
+				pollInterrupt();
 				if (capBkrefs[t.group] == null)
 					capBkrefs[t.group] = new CaptureBackrefs();
 				CaptureBackrefs cb = capBkrefs[t.group];
@@ -880,14 +988,17 @@ public class SuperlinearDetector {
 		return capBkrefs;
 	}
 
-	static AutomatonStateMap pathsFromToAndStateMap(State begin, State end, int noCloseGroup) {
+	static AutomatonStateMap pathsFromToAndStateMap(State begin, State end, int noCloseGroup)
+	throws InterruptedException {
 		ArrayDeque<State> workList = new ArrayDeque<State>();
 		HashMap<State, HashSet<State>> revTrans = new HashMap<State, HashSet<State>>();
 		workList.addLast(begin);
 		revTrans.put(begin, new HashSet<State>());
 		while (!workList.isEmpty()) {
+			pollInterrupt();
 			State from = workList.removeLast();
 			for (Transition t : from.getTransitions()) {
+				pollInterrupt();
 				if (t.getKind() == Transition.Kind.TRANSITION_CAPTURE_CLOSE 
 				&& t.getGroup() == noCloseGroup)
 					continue;
@@ -909,9 +1020,11 @@ public class SuperlinearDetector {
 		oldNewStateMap.put(end, newEnd);
 		workList.addLast(end);
 		while (!workList.isEmpty()) {
+			pollInterrupt();
 			State to = workList.removeLast();
 			State newTo = oldNewStateMap.get(to);
 			for (State from : revTrans.get(to)) {
+				pollInterrupt();
 				State newFrom = oldNewStateMap.get(from);
 				if (newFrom == null) {
 					newFrom = new State();
@@ -919,6 +1032,7 @@ public class SuperlinearDetector {
 					workList.add(from);
 				}
 				for (Transition t : from.getTransitions()) {
+					pollInterrupt();
 					if (t.getDest() != to)
 						continue;
 					Transition newT = t.cloneToNewDest(newTo);
@@ -937,31 +1051,37 @@ public class SuperlinearDetector {
 		return new AutomatonStateMap(pathAuto, oldNewStateMap);
 	}
 
-	static AutomatonStateMap pathsFromToAndStateMap(State begin, State end) {
+	static AutomatonStateMap pathsFromToAndStateMap(State begin, State end)
+	throws InterruptedException {
 		return pathsFromToAndStateMap(begin, end, -1);
 	}
 
-	static Automaton pathsFromTo(State begin, State end, int noCloseGroup) {
+	static Automaton pathsFromTo(State begin, State end, int noCloseGroup)
+	throws InterruptedException {
 		return pathsFromToAndStateMap(begin, end, noCloseGroup).auto;
 	}
 
-	static Automaton pathsFromTo(State begin, State end) {
+	static Automaton pathsFromTo(State begin, State end)
+	throws InterruptedException {
 		return pathsFromToAndStateMap(begin, end).auto;
 	}
 
-	static AutomatonStateMap pathsLoopAndStateMap(State state, int noCloseGroup) {
+	static AutomatonStateMap pathsLoopAndStateMap(State state, int noCloseGroup)
+	throws InterruptedException {
 		return pathsFromToAndStateMap(state, state, noCloseGroup);
 	}
 
-	static AutomatonStateMap pathsLoopAndStateMap(State state) {
+	static AutomatonStateMap pathsLoopAndStateMap(State state)
+	throws InterruptedException {
 		return pathsFromToAndStateMap(state, state);
 	}
 
-	static Automaton pathsLoop(State state, int noCloseGroup) {
+	static Automaton pathsLoop(State state, int noCloseGroup)
+	throws InterruptedException {
 		return pathsLoopAndStateMap(state, noCloseGroup).auto;
 	}
 
-	static Automaton pathsLoop(State state) {
+	static Automaton pathsLoop(State state) throws InterruptedException {
 		return pathsLoopAndStateMap(state).auto;
 	}
 
@@ -1011,7 +1131,8 @@ public class SuperlinearDetector {
 	// 	return auto;
 	// }
 
-	private static ArrayList<State> statesReachable(State state, int noCloseGroup) {
+	private static ArrayList<State> statesReachable(State state, int noCloseGroup) 
+	throws InterruptedException {
 		ArrayDeque<State> workList = new ArrayDeque<State>();
 		workList.addLast(state);
 		HashSet<State> visited = new HashSet<State>();
@@ -1019,8 +1140,10 @@ public class SuperlinearDetector {
 		ArrayList<State> result = new ArrayList<State>();
 		result.add(state);
 		while (!workList.isEmpty()) {
+			pollInterrupt();
 			State from = workList.removeLast();
 			for (Transition t : from.getTransitions()) {
+				pollInterrupt();
 				State to = t.getDest();
 				if (!(t.getKind() == Transition.Kind.TRANSITION_CAPTURE_CLOSE
 				&& t.getGroup() == noCloseGroup) && !visited.contains(to)) {
@@ -1033,7 +1156,54 @@ public class SuperlinearDetector {
 		return result;
 	}
 
-	private static ArrayList<State> statesReachable(State state) {
+	private static ArrayList<State> statesReachable(State state)
+	throws InterruptedException {
 		return statesReachable(state, -1);
+	}
+
+	private static Automaton intersectionIt(Automaton a1, Automaton a2)
+	throws InterruptedException {
+		Automaton r = BasicOperations.intersection(a1, a2);
+		pollInterrupt();
+		return r;
+	}
+
+	private static Automaton intersectionIt(Automaton a1, Automaton a2, Automaton a3)
+	throws InterruptedException {
+		Automaton r = BasicOperations.intersection(a1, a2);
+		pollInterrupt();
+		r = BasicOperations.intersection(r, a3);
+		pollInterrupt();
+		return r;
+	}
+
+	private static Automaton unionIt(Collection<Automaton> as) 
+	throws InterruptedException {
+		Automaton r = Automaton.union(as);
+		pollInterrupt();
+		return r;
+	}
+
+	private static boolean isEmptyIt(Automaton a) throws InterruptedException {
+		boolean b = BasicOperations.isEmpty(a);
+		pollInterrupt();
+		return b;
+	}
+	
+	private static boolean isEmptyStringIt(Automaton a)
+	throws InterruptedException {
+		boolean b = BasicOperations.isEmptyString(a);
+		pollInterrupt();
+		return b;
+	}
+
+	private static void minimizeIt(Automaton a) throws InterruptedException {
+		a.minimize();
+		pollInterrupt();
+	}
+
+	private static void pollInterrupt() throws InterruptedException {
+		if (Thread.interrupted())
+			throw new InterruptedException("thread interrupted during detection");
 	}
 }
