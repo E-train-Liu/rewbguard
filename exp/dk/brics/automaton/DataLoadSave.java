@@ -23,6 +23,10 @@ import java.util.regex.Pattern;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.tomlj.Toml;
+import org.tomlj.TomlArray;
+import org.tomlj.TomlParseResult;
+import org.tomlj.TomlTable;
 
 
 public class DataLoadSave {
@@ -103,6 +107,36 @@ public class DataLoadSave {
 				jsonObj.optString("flags"),
 				sources
 			));
+		}
+		return rpatterns;
+	}
+
+
+	static ArrayList<RPattern> loadTomlPattern(Path path) throws IOException {
+		String pathStr = path.toString();
+		TomlParseResult toml = Toml.parse(path);
+		if (toml.hasErrors())
+			throw new IOException("TOML parse errors in " + pathStr + ": " + toml.errors());
+		TomlArray dataArray = toml.getArray("data");
+		ArrayList<RPattern> rpatterns = new ArrayList<RPattern>();
+		if (dataArray == null)
+			return rpatterns;
+		rpatterns.ensureCapacity(dataArray.size());
+		for (int i = 0, n = dataArray.size(); i < n; ++i) {
+			TomlTable obj = dataArray.getTable(i);
+			String pattern = obj.getString("pattern");
+			String flags = obj.getString("flags");
+			if (flags == null) flags = "";
+			String[] sources = null;
+			TomlArray sourcesArray = obj.getArray("sources");
+			if (sourcesArray != null) {
+				sources = new String[sourcesArray.size()];
+				for (int j = 0; j < sources.length; ++j)
+					sources[j] = sourcesArray.getString(j);
+			} else {
+				sources = new String[] {pathStr + " [" + i + "]"};
+			}
+			rpatterns.add(new RPattern(pattern, flags, sources));
 		}
 		return rpatterns;
 	}
@@ -214,6 +248,22 @@ public class DataLoadSave {
 		}
 	}
 	*/
+
+	static String guessInputFormatByPath(Path path) {
+		if (path == null)
+			return null;
+		String str = path.toString();
+		if (str.endsWith(".toml"))
+			return "toml";
+		if (str.endsWith(".json"))
+			return "json";
+		if (str.endsWith(".rules"))
+			return "snort";
+		if (path.toFile().isDirectory())
+			return "snortdir";
+		return null;
+	}
+
 	// private static Pattern TOML_CONTROL_CHAR_REGEX = Pattern.compile("[\u0000-\u0008\u000B-\u001F\u007F]|'''");
 	static String toTomlString(String s) {
 		boolean hasNewLine = false;
