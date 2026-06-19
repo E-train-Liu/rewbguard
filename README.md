@@ -1,11 +1,18 @@
-# SLMAD
+# REwBGuard
 
 ## Introduction
 
-SLMAD stands for "Super-linear Memory Automaton Detector". 
+REwBGuard is a Regular Expression Denial of Service (REDoS) detector.
+It detects Regular Expressions with Backreferences (REwBs) with super-linear
+runtime through static analysis.
 
 This is one of the codebases for our USENIX Security 2026 paper:
-"Regular Expression Denial of Service Induced by Backreferences".
+
+> Yichen Liu, Berk Çakar, Aman Agrawal, Minseok Seo, James C Davis, 
+> Dongyoon Lee. \
+> "Regular Expression Denial of Service Induced by Backreferences". \
+> In *Proceedings of the 35th USENIX Security Symposium* 
+> *(USENIX Security 2026)*. August 2026.
 
 This project is based on
 [dk.brics.automaton](https://github.com/cs-au-dk/dk.brics.automaton).
@@ -14,7 +21,7 @@ We heavily extended code files under [src/](src/).
 Now the regular expression part supports following features:
 + Capture groups,
 + Backreferences,
-+ More escape and character classes.
++ More escapes and character classes.
 
 The automaton part now supports the following features:
 + The construction of Two-Phase Memory Automaton (2PMFA). Now the following 
@@ -22,7 +29,7 @@ The automaton part now supports the following features:
     - Real epsilon transitions,
     - Capture-open and capture-close,
     - Backreference.
-+ Extended basic operations which supports part of 2PMFAs
++ Extended basic operations which supports some 2PMFAs:
     - Backtracking run,
     - Union, intersection, complement, minimization, etc.,
     - Deciding emptyness.
@@ -150,10 +157,11 @@ java ... dk.brics.automaton.Main   \
 
 This project is forked from
 [dk.brics.automaton](https://github.com/cs-au-dk/dk.brics.automaton).
-The original repository use BSD lisence. Check [COPYING](COPYING) and the 
-original repository for more information.
+We appreciate the work by previous developers.
 
-See original "README" file of dk.brics.automaton at
+The dk.brics.automaton use BSD lisence. Check [COPYING](COPYING) and the 
+original repository for more information.
+See original "README" file of dk.brics.automaton at 
 [README.old.md](README.old.md).
 
 This project is also under BSD license.

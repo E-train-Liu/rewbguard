@@ -147,7 +147,7 @@
         </executions>
       </plugin>
 
-      <!-- Added for SLMAD -->
+      <!-- Added for REwBGuard -->
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>build-helper-maven-plugin</artifactId>
@@ -167,31 +167,6 @@
           </execution>
         </executions>
       </plugin>
-      <!-- <plugin>
-        <groupId>org.codehaus.mojo</groupId>
-        <artifactId>exec-maven-plugin</artifactId>
-        <version>3.1.0</version>
-        <executions>
-          <execution>
-            <id>analyze-regexp</id>
-            <goals>
-              <goal>java</goal>
-            </goals>
-            <phase>none</phase>
-            <configuration>
-              <mainClass>dk.brics.automaton.AnalyzeRegExp</mainClass>
-              <arguments>
-                <argument>-j</argument>
-                <argument>data/exp/snort2-register-regex.json</argument>
-                <argument>-r</argument>
-                <argument>data/out/detect_snort2-register.toml</argument>
-                <argument>-a</argument>
-                <argument>data/out/atkre_snort2-register.toml</argument>
-              </arguments>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin> -->
     </plugins>
   </build>
 
@@ -208,7 +183,7 @@
       <version>5.9.2</version>
       <scope>test</scope>
     </dependency>
-    <!-- Added for SLMAD -->
+    <!-- Added for REwBGuard -->
     <dependency>
       <groupId>org.json</groupId>
       <artifactId>json</artifactId>

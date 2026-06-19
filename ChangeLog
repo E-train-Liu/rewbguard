@@ -1,5 +1,11 @@
-SLMAD Changelog
+REBASIL Changelog
 
+0.0-1 - > 0.1-1
+===============
+- improved atatck string generation.
+- make detection methods interruptable.
+- new Main class with imrpoved CLI args
+- change name to "REwBGuard"
 
 0.0-1
 =====
