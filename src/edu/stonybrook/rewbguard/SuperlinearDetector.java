@@ -1,4 +1,4 @@
-package dk.brics.automaton;
+package edu.stonybrook.rewbguard;
 
 import java.lang.reflect.UndeclaredThrowableException;
 import java.util.ArrayDeque;
@@ -17,6 +17,11 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import dk.brics.automaton.Automaton;
+import dk.brics.automaton.BasicAutomata;
+import dk.brics.automaton.BasicOperations;
+import dk.brics.automaton.State;
+import dk.brics.automaton.Transition;
 
 public class SuperlinearDetector {
 
@@ -954,34 +959,42 @@ public class SuperlinearDetector {
 		CaptureBackrefs[] capBkrefs = new CaptureBackrefs[maxGroup + 1];
 		ArrayDeque<State> workList = new ArrayDeque<State>();
 		HashSet<State> visited = new HashSet<State>();
-		workList.addLast(auto.initial);
-		visited.add(auto.initial);
+		workList.addLast(auto.getInitialState());
+		visited.add(auto.getInitialState());
 		while (!workList.isEmpty()) {
 			pollInterrupt();
 			State s = workList.removeLast();
-			for (Transition t : s.transitions) {
+			for (Transition t : s.getTransitions()) {
 				pollInterrupt();
-				if (capBkrefs[t.group] == null)
-					capBkrefs[t.group] = new CaptureBackrefs();
-				CaptureBackrefs cb = capBkrefs[t.group];
-				switch (t.kind) {
-					case TRANSITION_CAPTURE_OPEN:
-						cb.beforeOpen = s;
-						cb.afterOpen = t.to;
-						break;
-					case TRANSITION_CAPTURE_CLOSE:
-						cb.beforeClose = s;
-						cb.afterClose = t.to;
-						break;
-					case TRANSITION_BACKREF:
-						cb.beforeBackrefs.add(s);
-						cb.afterBackrefs.add(t.to);
-						break;
-					default:
+				Transition.Kind kind = t.getKind();
+				State to = t.getDest();
+				if (kind == Transition.Kind.TRANSITION_CAPTURE_OPEN ||
+					kind == Transition.Kind.TRANSITION_CAPTURE_CLOSE ||
+					kind == Transition.Kind.TRANSITION_BACKREF
+				) {
+					int group = t.getGroup();
+					if (capBkrefs[group] == null)
+						capBkrefs[group] = new CaptureBackrefs();
+					CaptureBackrefs cb = capBkrefs[group];
+					switch (kind) {
+						case TRANSITION_CAPTURE_OPEN:
+							cb.beforeOpen = s;
+							cb.afterOpen = to;
+							break;
+						case TRANSITION_CAPTURE_CLOSE:
+							cb.beforeClose = s;
+							cb.afterClose = to;
+							break;
+						case TRANSITION_BACKREF:
+							cb.beforeBackrefs.add(s);
+							cb.afterBackrefs.add(to);
+							break;
+						default:
+					}
 				}
-				if (!visited.contains(t.to)) {
-					workList.add(t.to);
-					visited.add(t.to);
+				if (!visited.contains(to)) {
+					workList.add(to);
+					visited.add(to);
 				}
 			}
 		}

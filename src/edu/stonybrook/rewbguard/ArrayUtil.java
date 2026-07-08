@@ -1,7 +1,6 @@
-package dk.brics.automaton;
+package edu.stonybrook.rewbguard;
 
 import java.lang.reflect.Array;
-import java.util.Arrays;
 
 public class ArrayUtil {
     public static boolean any(boolean[] bools) {

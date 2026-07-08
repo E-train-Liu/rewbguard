@@ -101,6 +101,14 @@ public class State implements Serializable, Comparable<State> {
 	public boolean isAccept() {
 		return accept;
 	}
+
+	/**
+	 * Returns the number of state.
+	 * @return the number of state
+	 */
+	public int getNumber() {
+		return number;
+	}
 	
 	/** 
 	 * Performs lookup in transitions, assuming determinism. 

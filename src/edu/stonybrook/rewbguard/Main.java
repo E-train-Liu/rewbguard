@@ -1,4 +1,4 @@
-package dk.brics.automaton;
+package edu.stonybrook.rewbguard;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -27,6 +27,9 @@ import net.sourceforge.argparse4j.impl.Arguments;
 import net.sourceforge.argparse4j.inf.ArgumentParser;
 import net.sourceforge.argparse4j.inf.ArgumentParserException;
 import net.sourceforge.argparse4j.inf.Namespace;
+
+import dk.brics.automaton.Automaton;
+import dk.brics.automaton.RegExp;
 
 public class Main {
 

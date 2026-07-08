@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="ISO-8859-1"?>
 
-<project name="dk.brics.automaton" default="all" basedir=".">
+<project name="rewbguard" default="all" basedir=".">
 
-	<property name="project" value="automaton" />
+	<property name="project" value="rewbguard" />
 	<property name="version" value="1.12" />
 	<property name="release" value="4" />
 
@@ -13,13 +13,13 @@
 
 	<property name="lib.dir" value="lib"/>
 
-	<path id="exp.lib.classpath">
+	<path id="lib.classpath">
 		<fileset dir="${lib.dir}">
 			<include name="*.jar"/>
 		</fileset>
 	</path>
-	<path id="exp.classpath">
-		<path refid="exp.lib.classpath" />
+	<path id="classpath">
+		<path refid="lib.classpath" />
 		<pathelement location="antbuild" />
 	</path>
 
@@ -28,9 +28,8 @@
 	<target name="compile">
 		<mkdir dir="antbuild" />
 		<javac destdir="antbuild" source="1.8" target="1.8" optimize="${optimize}" debug="${debug}" includeantruntime="false"
-		       classpathref="exp.lib.classpath">
+		       classpathref="lib.classpath">
 			<src path="src" />
-			<src path="exp" />
 		</javac>
 	</target>
 
@@ -38,7 +37,7 @@
 
 	<target name="jar" depends="compile,datatypes">
 		<mkdir dir="dist" />
-		<jar jarfile="dist/${project}.jar" basedir="antbuild" includes="dk/**/*.class,*.aut" />
+		<jar jarfile="dist/${project}.jar" basedir="antbuild" includes="dk/**/*.class,edu/**/*.class,*.aut" />
 	</target>
 
 	<target name="clean">
@@ -72,7 +71,7 @@
 		</copy>
 		<mkdir dir="${dir}/src" />
 		<copy todir="${dir}/src">
-			<fileset dir="src" includes="dk/brics/automaton/*.*,*.txt" excludes="**/*.class" />
+			<fileset dir="src" includes="dk/brics/automaton/*.*,edu/stonybrook/rewbguard/*.*,*.txt" excludes="**/*.class" />
 		</copy>
 		<tar tarfile="${dir}-${release}.tar" basedir="." includes="${dir}/**" />
 		<gzip zipfile="${dir}-${release}.tar.gz" src="${dir}-${release}.tar" />
@@ -95,6 +94,19 @@
 			<bottom><![CDATA[<i> Copyright &#169; 2001-2022 Anders M&oslash;ller. </i>]]></bottom>
 			<link href="https://docs.oracle.com/javase/8/docs/api/" />
 		</javadoc>
+		<javadoc packagenames="edu.stonybrook.rewbguard" 
+			sourcepath="src" 
+			destdir="doc" 
+			nodeprecated="true" 
+			author="true" 
+			notree="true" 
+			nohelp="true" 
+			windowtitle="rewbguard"
+			additionalparam="-Xdoclint:none">
+			<doctitle><![CDATA[rewbguard<br>API Specification]]></doctitle>
+			<bottom><![CDATA[<i> Copyright &#169; 2024-2026 Yichen Liu. </i>]]></bottom>
+			<link href="https://docs.oracle.com/javase/8/docs/api/" />
+		</javadoc>
 	</target>
 
 	<target name="publish" depends="tgz">
@@ -111,15 +123,15 @@
 	</target>
 
 	<target name="exec" depends="compile,datatypes">
-		<java classname="dk.brics.automaton.Main">
-			<classpath refid="exp.classpath"/>
+		<java classname="edu.stonybrook.rewbguard.Main">
+			<classpath refid="classpath"/>
 			<arg value="${exec.args}"/>
 		</java>
 	</target>
 
 	<target name="execQuick" depends="compile,datatypes">
-		<java classname="dk.brics.automaton.Main">
-			<classpath refid="exp.classpath"/>
+		<java classname="edu.stonybrook.rewbguard.Main">
+			<classpath refid="classpath"/>
 			<arg value="-i"/> <arg path="data/exp/snort2-register-regexes.toml"/>
 			<arg value="-o"/> <arg path="data/out/detect_snort2-register.toml"/>
 			<arg value="-a"/> <arg path="data/out/atkre_snort2-register.toml"/>

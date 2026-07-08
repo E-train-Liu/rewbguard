@@ -1,4 +1,6 @@
-package dk.brics.automaton;
+package edu.stonybrook.rewbguard;
+
+import dk.brics.automaton.Automaton;
 
 public class AttackAutomaton {
     int vulnerableType;

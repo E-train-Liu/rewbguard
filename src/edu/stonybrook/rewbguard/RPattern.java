@@ -1,4 +1,4 @@
-package dk.brics.automaton;
+package edu.stonybrook.rewbguard;
 
 public class RPattern implements Cloneable {
     public String pattern;

@@ -3,17 +3,17 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>dk.brics</groupId>
-  <artifactId>automaton</artifactId>
-  <version>1.12-4</version>
+  <groupId>edu.stonybrook</groupId>
+  <artifactId>rewbguard</artifactId>
+  <version>0.2-1</version>
   <packaging>jar</packaging>
 
-  <name>dk.brics.automaton</name>
+  <name>rewbguard</name>
   <description>
-    This package contains a full DFA/NFA implementation with Unicode
-    alphabet and support for all standard regular expression operations.
+    A Regular Expression Denial of Service (REDoS) static detector,
+    which find Regular Expressions with Bakreferences (REwB) with super-linear
+    time complexity.
   </description>
-  <url>http://www.brics.dk/automaton</url>
 
   <licenses>
     <license>
@@ -30,20 +30,13 @@
       <url>https://cs.au.dk/~amoeller</url>
       <organization>Aarhus University</organization>
     </developer>
+    <developer>
+      <id>liu38</id>
+      <name>Yichen Liu</name>
+      <email>liu38@cs.stonybrook.edu</email>
+      <organization>Stony Brook University</organization>
+    </developer>
   </developers>
-
-  <distributionManagement>
-    <snapshotRepository>
-      <id>ossrh</id>
-      <url>https://oss.sonatype.org/content/repositories/snapshots</url>
-    </snapshotRepository>
-  </distributionManagement>
-
-  <scm>
-    <connection>scm:git:git://github.com/cs-au-dk/dk.brics.automaton.git</connection>
-    <developerConnection>scm:git:ssh://github.com:cs-au-dk/dk.brics.automaton.git</developerConnection>
-    <url>https://github.com/cs-au-dk/dk.brics.automaton</url>
-  </scm>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -142,27 +135,6 @@
                   <value>build</value>
                 </systemProperty>
               </systemProperties>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
-
-      <!-- Added for REwBGuard -->
-      <plugin>
-        <groupId>org.codehaus.mojo</groupId>
-        <artifactId>build-helper-maven-plugin</artifactId>
-        <version>3.0.0</version>
-        <executions>
-          <execution>
-            <id>add-exp-source</id>
-            <phase>generate-sources</phase>
-            <goals>
-              <goal>add-source</goal>
-            </goals>
-            <configuration>
-              <sources>
-                <source>exp</source>
-              </sources>
             </configuration>
           </execution>
         </executions>

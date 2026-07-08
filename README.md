@@ -14,6 +14,8 @@ This is one of the codebases for our USENIX Security 2026 paper:
 > In *Proceedings of the 35th USENIX Security Symposium* 
 > *(USENIX Security 2026)*. August 2026.
 
+### Our Work
+
 This project is based on
 [dk.brics.automaton](https://github.com/cs-au-dk/dk.brics.automaton).
 We heavily extended code files under [src/](src/).
@@ -51,7 +53,7 @@ The run
 
 ```sh
 mvn exec:java \
-  -Dexec.mainClass="dk.brics.automaton.Main" \
+  -Dexec.mainClass="edu.stonybrook.rewbguard.Main" \
   -Dexec.args="-i data/exp/snort2-register-regexes.toml -o data/out/detect_snort2-register.toml -a data/out/atkre_snort2-register.toml --vultypes 123 --timeout 60"
 ```
 
@@ -88,23 +90,28 @@ ant exec \
 Or muanually run java by
 
 ```sh
-java -classpath "antbuild:lib/*" dk.brics.automaton.Main -i data/exp/snort2-register-regexes.toml -o data/out/detect_snort2-register.toml -a data/out/atkre_snort2-register.toml --vultypes 123 --timeout 60
+java -classpath "antbuild:lib/*" edu.stonybrook.rewbguard.Main -i data/exp/snort2-register-regexes.toml -o data/out/detect_snort2-register.toml -a data/out/atkre_snort2-register.toml --vultypes 123 --timeout 60
 ```
 
 You can modify the arguments. See "See "Usage".
 
 where possible input arguments include
 
+### Note
+
+Parsing TOML is memory consumption. It you get `OutOfMemoryError`, consider
+using JSON file (e.g. `data/exp/snort2-register-regexes.json`) as input.
+
 ## Usage
 
 ```sh
-java ... dk.brics.automaton.Main   \
-  -i <input_file>                  \
-  -o <output_detect_file>          \
-  [-a <output_attack_string_file>] \
-  [-f <input_format>]              \
-  [-v <vulnerability_types>]       \
-  [-t <timeout_sec>]               \
+java ... edu.stonybrook.rewbguard.Main \
+  -i <input_file>                      \
+  -o <output_detect_file>              \
+  [-a <output_attack_string_file>]     \
+  [-f <input_format>]                  \
+  [-v <vulnerability_types>]           \
+  [-t <timeout_sec>]                   \
   [-m]
 ```
 

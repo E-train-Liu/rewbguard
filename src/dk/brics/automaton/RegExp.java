@@ -160,7 +160,7 @@ import java.util.Set;
  * */
 public class RegExp {
 
-	enum Kind {
+	public enum Kind {
 		REGEXP_UNION,
 		REGEXP_CONCATENATION,
 		REGEXP_INTERSECTION,

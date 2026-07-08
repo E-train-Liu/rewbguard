@@ -1,4 +1,4 @@
-package dk.brics.automaton;
+package edu.stonybrook.rewbguard;
 
 import java.io.FileWriter;
 import java.io.IOException;

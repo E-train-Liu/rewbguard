@@ -1,10 +1,15 @@
-package dk.brics.automaton;
+package edu.stonybrook.rewbguard;
 
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.Set;
+
+import dk.brics.automaton.Automaton;
+import dk.brics.automaton.State;
+import dk.brics.automaton.Transition;
 
 public class AutomatonUtil{
     private static class StateCapture {
@@ -51,7 +56,7 @@ public class AutomatonUtil{
                 return t2.getDest() == null ? 0 : -1;
             if (t2.getDest() == null)
                 return 1;
-            return Integer.compare(t1.getDest().number, t2.getDest().number);
+            return Integer.compare(t1.getDest().getNumber(), t2.getDest().getNumber());
         }
         private String tranToStr(Transition t) {
             switch (t.getKind()) {
@@ -83,7 +88,7 @@ public class AutomatonUtil{
 		String[] resultWithEps = null;
         while (!worklist.isEmpty()) {
             StateCapture stCap = worklist.removeLast();
-            if (stCap.state.accept) {
+            if (stCap.state.isAccept()) {
                 String[] result = stCap.captureP2.clone();
                 result[0] = stCap.captureP1[0];
                 if (tryAvoidEps && result[0].isEmpty())
@@ -91,7 +96,8 @@ public class AutomatonUtil{
                 else
                     return result;
 			}
-            Transition[] trans = stCap.state.getSortedTransitionArray(false);
+            Set<Transition> tranSet = stCap.state.getTransitions();
+            Transition[] trans = tranSet.toArray(new Transition[tranSet.size()]);
             Arrays.sort(trans, new TransitionStringComparator(stCap.captureP2));
             for (int t = trans.length - 1; t >= 0; --t) {
                 Transition tran = trans[t];
