@@ -18,7 +18,8 @@ This is one of the codebases for our USENIX Security 2026 paper:
 
 This project is based on
 [dk.brics.automaton](https://github.com/cs-au-dk/dk.brics.automaton).
-We heavily extended code files under [src/](src/).
+We heavily extended code files under
+[src/dk/brics/automaton/](src/dk/brics/automaton/).
 
 Now the regular expression part supports following features:
 + Capture groups,
@@ -37,7 +38,8 @@ The automaton part now supports the following features:
     - Deciding emptyness.
 
 We also created simple detectors for the 3 REDoS patterns in our paper 
-and the IDA pattern. Code can be found in [exp/](exp/).
+and the IDA pattern. Code can be found in
+[src/edu/stonybrook/rewbguard/](src/edu/stonybrook/rewbguard/).
 
 ## Quick Start
 
@@ -172,3 +174,5 @@ See original "README" file of dk.brics.automaton at
 [README.old.md](README.old.md).
 
 This project is also under BSD license.
+
+Copyright (c) 2024-2026 Yichen Liu
