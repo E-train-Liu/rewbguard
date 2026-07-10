@@ -5,13 +5,13 @@
 
   <groupId>edu.stonybrook</groupId>
   <artifactId>rewbguard</artifactId>
-  <version>0.2-1</version>
+  <version>0.2-2</version>
   <packaging>jar</packaging>
 
   <name>rewbguard</name>
   <description>
     A Regular Expression Denial of Service (REDoS) static detector,
-    which find Regular Expressions with Bakreferences (REwB) with super-linear
+    which finds Regular Expressions with Bakreferences (REwB) with super-linear
     time complexity.
   </description>
 

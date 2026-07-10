@@ -11,8 +11,8 @@
 	</fail>
 
 	<property name="project" value="rewbguard" />
-	<property name="version" value="1.12" />
-	<property name="release" value="4" />
+	<property name="version" value="0.2" />
+	<property name="release" value="2" />
 
 	<property name="optimize" value="on" />
 	<property name="debug" value="off" />

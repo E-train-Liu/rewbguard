@@ -1,8 +1,19 @@
-REBASIL Changelog
+REwBGuard Changelog
 
-0.0-1 - > 0.1-1
+0.2-1 -> 0.2-2
 ===============
-- improved atatck string generation.
+- bug fix: migrate API usage not available in Java 8 - thanks to Nila Manian for finding this bug
+- specify release=8 dor building
+- let Snort regex extractor to accept cli args as input and output paths
+
+0.1-1 -> 0.2-1
+===============
+- change package name to edu.stonybrook.rewbguard
+- move detector code files from exp/ to src/edu/stonybrook/rewbguard
+
+0.0-1 -> 0.1-1
+===============
+- improved attack string generation.
 - make detection methods interruptable.
 - new Main class with imrpoved CLI args
 - change name to "REwBGuard"
