@@ -6,6 +6,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -209,7 +210,7 @@ public class Main {
         Namespace ns = parseArgs(args);
 
         String input = ns.getString("input");
-        Path inputPath = Path.of(input);
+        Path inputPath = Paths.get(input);
         String inputFormat = ns.getString("format");
         if (inputFormat == null) {
             inputFormat = DataLoadSave.guessInputFormatByPath(inputPath);
@@ -241,9 +242,9 @@ public class Main {
         PrintStream atkrePS  = null;
         try {
             if (outputReport != null)
-                reportPS = new PrintStream(outputReport, StandardCharsets.UTF_8);
+                reportPS = new PrintStream(outputReport, StandardCharsets.UTF_8.name());
             if (outputAtkre != null)
-                atkrePS = new PrintStream(outputAtkre, StandardCharsets.UTF_8);
+                atkrePS = new PrintStream(outputAtkre, StandardCharsets.UTF_8.name());
             analyzeRegexAutomatons(rpatterns, vulTypes, multiple, timeoutNs, reportPS, atkrePS);
         } finally {
             if (reportPS != null) reportPS.close();

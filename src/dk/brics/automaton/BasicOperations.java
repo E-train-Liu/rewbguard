@@ -436,8 +436,20 @@ final public class BasicOperations {
 	static public Automaton repeat(Automaton a, int min, int max) {
 		if (min > max)
 			return BasicAutomata.makeEmpty();
-		if (min == max && a.isSingleton())
-			return BasicAutomata.makeString(a.singleton.repeat(min));
+		if (min == max && a.isSingleton()) {
+			String repeatString ;
+			if (min == 0)
+				repeatString = "";
+			else if (min == 1)
+				repeatString = a.singleton;
+			else {
+				StringBuilder sb = new StringBuilder(a.singleton.length() * min);
+				for (int i = 0; i < min; ++i)
+					sb.append(a.singleton);
+				repeatString = sb.toString();
+			}
+			return BasicAutomata.makeString(repeatString);
+		}
 		max -= min;
 		a.expandSingleton();
 		Automaton b;

@@ -2,7 +2,7 @@ package edu.stonybrook.rewbguard;
 
 import java.io.FileWriter;
 import java.io.IOException;
-import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.regex.Pattern;
 import java.util.ArrayList;
@@ -12,7 +12,7 @@ import org.json.JSONObject;
 
 public class ExtractSnortDataset {
 	public static void main(String[] args) throws IOException {
-		ArrayList<RPattern> rpatterns = DataLoadSave.loadSnortRulesDirPattern(Path.of("data/exp/snort2-register-rules"));
+		ArrayList<RPattern> rpatterns = DataLoadSave.loadSnortRulesDirPattern(Paths.get("data/exp/snort2-register-rules"));
 		rpatterns = DataLoadSave.mergeRepeatRPattern(rpatterns);
 		JSONArray json = new JSONArray();
 		StringBuilder toml = new StringBuilder();

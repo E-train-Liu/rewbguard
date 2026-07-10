@@ -2,6 +2,14 @@
 
 <project name="rewbguard" default="all" basedir=".">
 
+	<fail message="Requires ant version >= 1.9.8">
+		<condition>
+			<not>
+				<antversion atleast="1.9.8" />
+			</not>
+		</condition>
+	</fail>
+
 	<property name="project" value="rewbguard" />
 	<property name="version" value="1.12" />
 	<property name="release" value="4" />
@@ -12,6 +20,8 @@
 	<property name="public" value="${user.home}/public_html/${project}"/>
 
 	<property name="lib.dir" value="lib"/>
+
+	<property name="jdkversion.min" value="8" />
 
 	<path id="lib.classpath">
 		<fileset dir="${lib.dir}">
@@ -27,7 +37,9 @@
 
 	<target name="compile">
 		<mkdir dir="antbuild" />
-		<javac destdir="antbuild" source="1.8" target="1.8" optimize="${optimize}" debug="${debug}" includeantruntime="false"
+		<javac destdir="antbuild"
+			   source="${jdkversion.min}" target="${jdkversion.min}" release="${jdkversion.min}"
+		       optimize="${optimize}" debug="${debug}" includeantruntime="false"
 		       classpathref="lib.classpath">
 			<src path="src" />
 		</javac>

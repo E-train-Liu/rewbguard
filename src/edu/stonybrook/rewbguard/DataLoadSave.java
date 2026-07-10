@@ -36,7 +36,7 @@ public class DataLoadSave {
 		ArrayList<RPattern> rpatterns = new ArrayList<RPattern>();
 		for (Path path : paths) {
 			String pathStr = path.toString();
-			String content = Files.readString(path, StandardCharsets.UTF_8);
+			String content = readFileString(path);
 			Matcher matcher = SNORT_RULE_PATTERN_REGEX.matcher(content);
 			int lastStart = 0, line = 1;
 			while (matcher.find()) {
@@ -88,7 +88,7 @@ public class DataLoadSave {
 
 	static ArrayList<RPattern> loadJsonPattern(Path path) throws IOException, JSONException {
 		String pathStr = path.toString();
-		String content = Files.readString(path, StandardCharsets.UTF_8);
+		String content = readFileString(path);
 		JSONArray jsonArray = new JSONArray(content);
 		ArrayList<RPattern> rpatterns = new ArrayList<RPattern>();
 		rpatterns.ensureCapacity(jsonArray.length());
@@ -356,5 +356,11 @@ public class DataLoadSave {
 		for (ArrayList<T> l : ll)
 			result.addAll(l);
 		return result;
+	}
+
+	static String readFileString(Path path) throws IOException {
+		// Note: Files.readString() is only available in JDK >= 11.
+		byte[] bytes = Files.readAllBytes(path);
+		return new String(bytes, StandardCharsets.UTF_8);
 	}
 }
